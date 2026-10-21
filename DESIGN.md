@@ -19,8 +19,8 @@ P0 is needed for the first end-to-end deploy. P1 must land before anyone outside
 |---|---|---|---|
 | 1 | Public repo: README, license (Apache-2.0), this doc | P0 | done |
 | 2 | Go module and skeleton (`nimbus --version`, `nimbus --help`) | P0 | done |
-| 3 | Release pipeline: GoReleaser in GitHub Actions on `v*` tags, with checksums | P0 | todo |
-| 4 | `install.sh`: detect OS/arch, verify checksum, install to `~/.local/bin`, honor `NIMBUS_VERSION` | P0 | todo |
+| 3 | Release pipeline: `.goreleaser.yaml` with checksums. Releases run locally for now; the GitHub Actions workflow on `v*` tags needs the `workflow` token scope. | P0 | doing |
+| 4 | `install.sh`: detect OS/arch, verify checksum, install to `~/.local/bin`, honor `NIMBUS_VERSION` | P0 | done |
 | 5 | Output contract: JSON when not a TTY, envelope, error codes and hints | P0 | done |
 | 6 | `nimbus login`: two-step device flow, credentials file, `NIMBUS_TOKEN` | P0 | done |
 | 7 | `nimbus whoami` | P0 | done |
@@ -54,7 +54,8 @@ What `install.sh` does:
 Notes:
 - `releases/latest/download/…` is a plain redirect, not a GitHub API call, so it isn't subject to the 60 requests/hour limit on unauthenticated API calls. It needs `-L`, which `-fsSL` includes.
 - Go users can run `go install github.com/wceriale/nimbus-cli/cmd/nimbus@latest`.
-- Releases are built by GoReleaser on every `v*` tag, for darwin and linux on amd64 and arm64.
+- Releases are built by GoReleaser (`.goreleaser.yaml`) for darwin and linux on amd64 and arm64. Archive names carry no version, so `latest/download` URLs never change. For now a release runs locally (`GITHUB_TOKEN=$(gh auth token) goreleaser release --clean` after pushing a tag). Moving it to GitHub Actions is the next step.
+- Versions stay at v0.0.x until the agent usability eval passes against a real backend.
 - Agents in network sandboxes need `github.com`, `raw.githubusercontent.com`, and GitHub's release-asset host on their allowlist.
 - This repo holds only the CLI, `install.sh`, the agent docs, examples, and this file. The server is private.
 
@@ -72,7 +73,12 @@ nimbus list                apps you own
 nimbus docs                the agent guide, printed as markdown
 ```
 - **Global flags:** `--json`, `--app <name>` (defaults to `name` in `./nimbus.yaml`), `--help`, `--version`.
-- **Environment variables:** `NIMBUS_TOKEN` overrides the stored login. `NIMBUS_API_URL` sets the API URL. Until Nimbus has a real domain there's no built-in default, so it's required, and a release sets the default with `-ldflags`. Credentials are only ever sent to the API that issued them.
+- **Environment variables:** `NIMBUS_TOKEN` overrides the stored login. `NIMBUS_API_URL` sets the API URL. Until the hosted backend exists, the built-in default is the placeholder `https://api.nimbus.example`.
+  - `.example` is reserved (RFC 2606), so the placeholder can never resolve or receive a token.
+  - The CLI recognizes it and fails with `api_url_placeholder` instead of a confusing network error.
+  - Once a real domain exists, change `DefaultAPIURL` in `internal/cli/app.go`, or set it with `-ldflags`.
+
+  Credentials are only ever sent to the API that issued them.
 
 ### How the core commands behave
 **`nimbus login`** runs an RFC 8628 device flow against the Nimbus control plane, which handles the company sign-in (Google or Okta). The same flow works for local, headless, and cloud agents.
@@ -134,6 +140,7 @@ nimbus docs                the agent guide, printed as markdown
 | `not_logged_in` | Credentials are missing, expired, or rejected | Run `nimbus login` and show the user the URL |
 | `login_expired`, `login_denied` | The device code timed out, or the user denied it | Run `nimbus login` again |
 | `org_not_enabled` | The user's org isn't onboarded | Tell the user Nimbus is invite-only for now |
+| `api_url_placeholder` | The API URL is the `.example` placeholder because the hosted backend isn't live | Tell the user; to try it, run the fake API |
 | `api_url_not_set`, `invalid_api_url` | No usable `NIMBUS_API_URL` | Set it |
 | `cli_outdated` | The server requires a newer CLI | Re-run the install one-liner |
 | `invalid_manifest`, `invalid_name` | `nimbus.yaml` or the app name is invalid | Fix the field it names |
@@ -251,7 +258,8 @@ Layout:
 | 2026-10-21 | The version check is a header on every request, not a separate call | One fewer round trip, and the server can't forget to check. |
 | 2026-10-21 | Sharing changes go through one all-or-nothing `PATCH` | `nimbus share a b c` is one call, and a bad address doesn't leave half the list applied. |
 | 2026-10-21 | Non-owners get `404 app_not_found`, never `403` | App names don't leak across the org. `permission_denied` is reserved for when roles exist. |
+| 2026-10-21 | The default API is a `.example` placeholder that the CLI recognizes | The CLI can ship before the backend does, can't leak a token to a domain we don't own, and tells agents plainly that the backend isn't live. |
 
 ## Open questions
-- Real domains for the API and for apps. Until then, docs use `.example`, and the CLI must not ship a default API URL on a domain we don't own.
+- Real domains for the API and for apps. Until then, docs use `.example`, and the CLI's default is the `.example` placeholder.
 - "Nimbus" is a crowded name: Mozilla's experimentation platform, Status's Ethereum client, and Nimbus Note all use it. It's fine as a working name, but check trademarks and domain availability before launch.

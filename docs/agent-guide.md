@@ -80,6 +80,7 @@ The file has no other fields. A `share:` field is an error, because sharing is a
 | `not_logged_in` | Run `nimbus login` and show the user the URL. |
 | `login_expired`, `login_denied` | Run `nimbus login` again. If it was denied, ask the user what happened. |
 | `org_not_enabled` | Tell the user Nimbus is invite-only for now. Their org has to be onboarded. |
+| `api_url_placeholder` | The hosted backend isn't live yet. Tell the user; retrying won't help. The hint explains how to try a local fake API. |
 | `api_url_not_set`, `invalid_api_url` | Set `NIMBUS_API_URL` to the URL the user gives you. |
 | `cli_outdated` | Re-run the install one-liner, then retry. |
 | `invalid_manifest`, `invalid_name` | Fix the field the message names. |

@@ -1,0 +1,30 @@
+# Builds the binaries and the GitHub release that install.sh downloads.
+#
+#   git tag vX.Y.Z && git push origin vX.Y.Z
+#   GITHUB_TOKEN=$(gh auth token) goreleaser release --clean
+version: 2
+project_name: nimbus
+
+builds:
+  - id: nimbus
+    main: ./cmd/nimbus
+    binary: nimbus
+    env: [CGO_ENABLED=0]
+    goos: [darwin, linux]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X github.com/wceriale/nimbus-cli/internal/cli.Version={{ .Version }}
+
+archives:
+  - formats: [tar.gz]
+    # No version in the name, so releases/latest/download/<name> always works.
+    name_template: "nimbus_{{ .Os }}_{{ .Arch }}"
+    files: [LICENSE, README.md]
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  use: git
+  sort: asc

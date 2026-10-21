@@ -170,11 +170,19 @@ func TestNotLoggedIn(t *testing.T) {
 	}
 }
 
-func TestAPIURLNotSet(t *testing.T) {
+func TestAPIURL(t *testing.T) {
 	h := newHarness(t)
 	delete(h.env, "NIMBUS_API_URL")
+	if e := h.fail("api_url_placeholder", t.TempDir(), "login"); !strings.Contains(e.Hint, "nimbus-fakeapi") {
+		t.Errorf("placeholder hint = %q", e.Hint)
+	}
+
+	saved := DefaultAPIURL
+	DefaultAPIURL = ""
+	t.Cleanup(func() { DefaultAPIURL = saved })
 	h.fail("api_url_not_set", t.TempDir(), "login")
-	h.env["NIMBUS_API_URL"] = "http://nimbus.example"
+
+	h.env["NIMBUS_API_URL"] = "http://nimbus.dev"
 	h.fail("invalid_api_url", t.TempDir(), "login")
 }
 

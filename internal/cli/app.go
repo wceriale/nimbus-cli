@@ -24,9 +24,11 @@ import (
 // -ldflags "-X github.com/wceriale/nimbus-cli/internal/cli.Version=v0.1.0".
 var Version = "dev"
 
-// DefaultAPIURL is set at release time once Nimbus has a real domain. While
-// it is empty, NIMBUS_API_URL is required.
-var DefaultAPIURL = ""
+// DefaultAPIURL is a placeholder until the hosted backend exists. .example is
+// reserved (RFC 2606), so it can never resolve or receive a token; the CLI
+// recognizes it and says the backend isn't live. Replace it here, or at
+// release time with -ldflags "-X …/internal/cli.DefaultAPIURL=https://…".
+var DefaultAPIURL = "https://api.nimbus.example"
 
 // App is one run of the CLI. Everything it touches outside the process is a
 // field, so tests can swap it.
