@@ -1,6 +1,7 @@
 # Build output
 /dist/
 /nimbus
+/nimbus-fakeapi
 
 # Go
 *.test

@@ -13,25 +13,26 @@ Last updated 2026-10-21. Status: design only; no release yet. Domains ending in 
 6. **The CLI is public and holds no power.** All authorization happens on the server.
 
 ## Tracker
-P0 is needed for the first end-to-end deploy. P1 must land before anyone outside the team uses it. Status values are todo, doing, and done.
+P0 is needed for the first end-to-end deploy. P1 must land before anyone outside the team uses it. Status values are todo, doing, and done. **"Done" means implemented and tested against `internal/fakeapi`.** Nothing has run against a real server yet, because there isn't one.
 
 | # | Item | Pri | Status |
 |---|---|---|---|
 | 1 | Public repo: README, license (Apache-2.0), this doc | P0 | done |
-| 2 | Go module and skeleton (`nimbus --version`, `nimbus --help`) | P0 | todo |
+| 2 | Go module and skeleton (`nimbus --version`, `nimbus --help`) | P0 | done |
 | 3 | Release pipeline: GoReleaser in GitHub Actions on `v*` tags, with checksums | P0 | todo |
 | 4 | `install.sh`: detect OS/arch, verify checksum, install to `~/.local/bin`, honor `NIMBUS_VERSION` | P0 | todo |
-| 5 | Output contract: JSON when not a TTY, envelope, error codes and hints | P0 | todo |
-| 6 | `nimbus login`: two-step device flow, credentials file, `NIMBUS_TOKEN` | P0 | todo |
-| 7 | `nimbus whoami` | P0 | todo |
-| 8 | `nimbus deploy`: writes manifest if missing, ignore rules, upload, wait, log tail on failure | P0 | todo |
-| 9 | `nimbus status`, `nimbus list` | P0 | todo |
-| 10 | `nimbus share`, `nimbus unshare` | P0 | todo |
-| 11 | `nimbus logs` (runtime logs, plus `--build`) | P0 | todo |
-| 12 | `cli_outdated` check against the server's minimum CLI version | P0 | todo |
-| 13 | `docs/agent-guide.md` and `nimbus docs`, with a generated command reference | P0 | todo |
-| 14 | `--help` for every command, with one example and the JSON it returns | P0 | todo |
-| 15 | Agent usability eval (see [Docs for agents](#docs-for-agents)) | P0 | todo |
+| 5 | Output contract: JSON when not a TTY, envelope, error codes and hints | P0 | done |
+| 6 | `nimbus login`: two-step device flow, credentials file, `NIMBUS_TOKEN` | P0 | done |
+| 7 | `nimbus whoami` | P0 | done |
+| 8 | `nimbus deploy`: writes manifest if missing, ignore rules, upload, wait, log tail on failure | P0 | done |
+| 9 | `nimbus status`, `nimbus list` | P0 | done |
+| 10 | `nimbus share`, `nimbus unshare` | P0 | done |
+| 11 | `nimbus logs` (runtime logs, plus `--build`) | P0 | done |
+| 12 | `cli_outdated`: send `Nimbus-CLI-Version` on every request and surface the server's 426 | P0 | done |
+| 13 | `docs/agent-guide.md` and `nimbus docs`, with a generated command reference | P0 | done |
+| 14 | `--help` for every command, with one example and the JSON it returns | P0 | done |
+| 15 | Agent usability eval (see [Docs for agents](#docs-for-agents)); needs a release and a server | P0 | todo |
+| 21 | Fake control plane (`internal/fakeapi`, `cmd/nimbus-fakeapi`) for tests and trying the CLI by hand | P0 | done |
 | 16 | `nimbus destroy`, `nimbus rollback`, `nimbus logout`, `nimbus upgrade` | P1 | todo |
 | 17 | `nimbus share --org` (anyone in the org who has the link) | P1 | todo |
 | 18 | `scopes` in the manifest, plus consent errors | P1 | todo |
@@ -71,7 +72,7 @@ nimbus list                apps you own
 nimbus docs                the agent guide, printed as markdown
 ```
 - **Global flags:** `--json`, `--app <name>` (defaults to `name` in `./nimbus.yaml`), `--help`, `--version`.
-- **Environment variables:** `NIMBUS_TOKEN` overrides the stored login. `NIMBUS_API_URL` overrides the API URL, which defaults to `https://api.nimbus.example`.
+- **Environment variables:** `NIMBUS_TOKEN` overrides the stored login. `NIMBUS_API_URL` sets the API URL. Until Nimbus has a real domain there's no built-in default, so it's required, and a release sets the default with `-ldflags`. Credentials are only ever sent to the API that issued them.
 
 ### How the core commands behave
 **`nimbus login`** runs an RFC 8628 device flow against the Nimbus control plane, which handles the company sign-in (Google or Okta). The same flow works for local, headless, and cloud agents.
@@ -122,24 +123,31 @@ nimbus docs                the agent guide, printed as markdown
 
 ## Output contract
 - **Stdout:** when `--json` is set or stdout isn't a TTY, stdout carries **exactly one JSON object** per run. Progress lines go to stderr. A human at a terminal gets plain text.
-- **Envelope:** success is `{"ok":true,"data":{…}}`. Failure is `{"ok":false,"error":{"code","message","hint",…}}`.
+- **Envelope:** success is `{"ok":true,"data":{…}}`. Failure is `{"ok":false,"error":{"code","message","hint",…}}`. Many results also carry `next`, a sentence telling the agent what to do next.
 - **Exit codes:** `0` means ok, `1` means failed (read `error.code`), `2` means bad usage. Agents should branch on `error.code`, not on the exit code.
 - **Stability:** a code never changes meaning once released. New codes can be added.
+- **Exceptions:** `nimbus docs`, `--help`, and `--version` always print text, because their reader wants text.
+- **Server errors pass straight through:** the CLI forwards the server's `code`, `message`, and `hint` unchanged.
 
 | `error.code` | When | What `hint` tells the agent |
 |---|---|---|
-| `not_logged_in` | Credentials are missing or expired | Run `nimbus login` and show the user the URL |
-| `login_expired` | The device code timed out | Run `nimbus login` again |
+| `not_logged_in` | Credentials are missing, expired, or rejected | Run `nimbus login` and show the user the URL |
+| `login_expired`, `login_denied` | The device code timed out, or the user denied it | Run `nimbus login` again |
 | `org_not_enabled` | The user's org isn't onboarded | Tell the user Nimbus is invite-only for now |
+| `api_url_not_set`, `invalid_api_url` | No usable `NIMBUS_API_URL` | Set it |
 | `cli_outdated` | The server requires a newer CLI | Re-run the install one-liner |
-| `invalid_manifest` | `nimbus.yaml` is invalid | Fix the field it names |
+| `invalid_manifest`, `invalid_name` | `nimbus.yaml` or the app name is invalid | Fix the field it names |
 | `name_taken` | Someone else in the org owns that name | Change `name` in `nimbus.yaml` |
-| `upload_too_large` | Over 100 MB after ignore rules | Add paths to `.gitignore` |
+| `upload_too_large` | Over 100 MB after ignore rules | Add `details.largest` paths to `.gitignore` |
 | `build_failed` | The build step failed | Read `log_tail`, fix the problem, deploy again |
 | `start_failed` | The container never served on `$PORT` | Listen on `0.0.0.0:$PORT` |
+| `deploy_timeout` | The deploy took longer than 10 minutes | Run `nimbus status` |
 | `app_not_found` | No such app, or it isn't yours | Check `nimbus list` |
-| `share_outside_org` | The email isn't in your org | v0.1 only shares inside the org |
-| `permission_denied` | You don't own the app | Ask the owner |
+| `app_not_specified` | No app argument, no `--app`, and no `./nimbus.yaml` | Pass `--app` or run from the app's directory |
+| `invalid_email`, `share_outside_org` | An address is malformed or outside the org | Fix the addresses in `details.emails` |
+| `network_error`, `unexpected_response` | The API didn't answer, or answered nonsense | Retry |
+| `usage` | Unknown command, bad flag, or wrong number of arguments | Run `nimbus <command> --help` |
+| `internal` | A local problem (permissions, disk) or a bug | Report it |
 
 ## Manifest
 This is the whole file in v0.1:
@@ -188,18 +196,46 @@ Outline of `docs/agent-guide.md`:
 - **Tracked:** pass rate, tool calls per run, and which errors agents hit. Every failure turns into a doc fix or a better `hint`.
 
 ## API the CLI needs (control plane, v1)
+`internal/api` is the client and `internal/fakeapi` is an in-memory server for the same contract. Every request sends `Nimbus-CLI-Version`, and the server can answer `426 cli_outdated`. The `/oauth` endpoints follow RFC 8628 and RFC 6749, so an off-the-shelf OAuth server can implement them.
 ```
-POST   /v1/device/code               start login
-POST   /v1/device/token              poll or finish login; refresh
-GET    /v1/me                        whoami; carries min_cli_version
-GET    /v1/apps                      list
-GET    /v1/apps/{app}                status, including the access list
-POST   /v1/apps/{app}/uploads        signed URL for the source tarball
-POST   /v1/apps/{app}/versions       build and deploy an upload
-PUT    /v1/apps/{app}/shares/{email}
-DELETE /v1/apps/{app}/shares/{email}
-GET    /v1/apps/{app}/logs?since=&limit=&build=
+P0
+POST   /oauth/device/code                       start login (RFC 8628)
+POST   /oauth/token                             finish login (device grant); refresh
+GET    /v1/me                                   login, whoami
+GET    /v1/apps                                 list
+PUT    /v1/apps/{app}                           create if missing (deploy)
+GET    /v1/apps/{app}                           status, including the access list
+POST   /v1/apps/{app}/uploads                   signed URL for the source tarball
+PUT    {upload_url}                             signed storage URL, sent without the API token
+POST   /v1/apps/{app}/versions                  build and deploy an upload
+GET    /v1/apps/{app}/versions/{n|latest}       deploy polling, status
+GET    /v1/apps/{app}/versions/{n}/build-log    logs --build
+GET    /v1/apps/{app}/logs?since=&limit=        logs
+PATCH  /v1/apps/{app}/shares                    share, unshare: {"add":[…],"remove":[…]}, all or nothing
+
+P1
+POST   /oauth/revoke                            logout (RFC 7009)
+DELETE /v1/apps/{app}                           destroy
+GET    /v1/apps/{app}/versions                  rollback targets
+POST   /v1/apps/{app}/rollback                  rollback
 ```
+
+## Development
+```sh
+go test -race ./...                        # unit tests, plus end-to-end tests against the fake API
+go run ./cmd/nimbus-fakeapi                # fake control plane on 127.0.0.1:8787
+export NIMBUS_API_URL=http://127.0.0.1:8787
+go run ./cmd/nimbus login                  # approve at the printed URL, then run it again
+```
+Layout:
+- `cmd/nimbus`: the CLI.
+- `internal/cli`: the commands.
+- `internal/api`: the HTTP client.
+- `internal/bundle`: packs the upload.
+- `internal/manifest`: reads and writes `nimbus.yaml`.
+- `internal/config`: the credentials file.
+- `internal/output`: the JSON contract.
+- `docs/agent-guide.md`: what `nimbus docs` prints.
 
 ## Decisions
 | Date | Decision | Why |
@@ -212,6 +248,9 @@ GET    /v1/apps/{app}/logs?since=&limit=&build=
 | 2026-10-21 | `nimbus deploy` writes the manifest, so there's no `nimbus init` | One less command to learn. |
 | 2026-10-21 | JSON whenever stdout isn't a TTY, exit codes 0/1/2, and `error.code` as the contract | Agents don't have to remember a flag, and there's one thing to branch on. |
 | 2026-10-21 | `nimbus mcp` is deferred | Claude Code, Codex, and Cursor all have a shell. A second interface would double the docs and the tests. |
+| 2026-10-21 | The version check is a header on every request, not a separate call | One fewer round trip, and the server can't forget to check. |
+| 2026-10-21 | Sharing changes go through one all-or-nothing `PATCH` | `nimbus share a b c` is one call, and a bad address doesn't leave half the list applied. |
+| 2026-10-21 | Non-owners get `404 app_not_found`, never `403` | App names don't leak across the org. `permission_denied` is reserved for when roles exist. |
 
 ## Open questions
 - Real domains for the API and for apps. Until then, docs use `.example`, and the CLI must not ship a default API URL on a domain we don't own.

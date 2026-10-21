@@ -22,5 +22,14 @@ Output is JSON whenever stdout isn't a terminal. On failure, `error.code` says w
 ## For humans
 The same commands work in a terminal, with readable output. Nimbus is invite-only during early access.
 
+## Development
+You need Go 1.24 or newer to build. Users don't need Go: releases are standalone binaries.
+```sh
+go test -race ./...
+go run ./cmd/nimbus-fakeapi                 # a fake control plane on 127.0.0.1:8787
+NIMBUS_API_URL=http://127.0.0.1:8787 go run ./cmd/nimbus login
+```
+See [DESIGN.md](DESIGN.md#development) for the code layout.
+
 ## License
 [Apache-2.0](LICENSE)
