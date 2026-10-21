@@ -1,0 +1,11 @@
+# Build output
+/dist/
+/nimbus
+
+# Go
+*.test
+*.out
+coverage.*
+
+# OS
+.DS_Store
