@@ -27,7 +27,7 @@ If step 3 still returns `pending`, the user hasn't approved yet. Ask them instea
 Run `nimbus deploy` in the app's directory, or `nimbus deploy <dir>`.
 - **First deploy:** it creates `nimbus.yaml` and names the app after the directory. Commit that file. For a different name, pass `--app <name>` on the first deploy.
 - **What's uploaded:** the directory, minus `.gitignore` matches, `.git`, `node_modules`, `.venv`, `__pycache__`, and **every `.env*` file**. Any `.env` files it left out are listed in `env_files_skipped`.
-- **Build:** a Dockerfile is used if there is one. Otherwise Nimbus detects Python, Node, or Go. If detection fails (`build_failed`), add a Dockerfile.
+- **Build:** the app needs a `Dockerfile` at its root. Without one, the deploy fails with `build_failed`.
 - **Waiting:** the command waits until the new version is live. That usually takes 1–3 minutes and is capped at 10, so **give the command a timeout of at least 10 minutes**. If your tool can't wait that long, run `nimbus deploy --no-wait`, then run `nimbus status` until `state` is `live` or `failed`.
 - **No changes:** running it again on the same source returns `"unchanged": true` and builds nothing.
 - **Failures:** `error.log_tail` has the end of the log. Fix the problem and deploy again. `nimbus logs --build` shows the full build log.
@@ -74,6 +74,15 @@ if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", "8080")))
 ```
 
+Saved as `app.py`, it needs this `Dockerfile` next to it:
+```dockerfile
+FROM python:3.12-slim
+WORKDIR /app
+RUN pip install --no-cache-dir flask
+COPY . .
+CMD ["python", "app.py"]
+```
+
 ## nimbus.yaml
 ```yaml
 name: renewal-desk      # required: 3–40 lowercase letters, digits, hyphens; becomes the URL
@@ -93,7 +102,7 @@ The file has no other fields. A `share:` field is an error, because sharing is a
 | `invalid_manifest`, `invalid_name` | Fix the field the message names. |
 | `name_taken` | Someone else in the org owns that name. Change `name` in `nimbus.yaml`. |
 | `upload_too_large` | Add the paths in `details.largest` to `.gitignore`, if the app doesn't need them at runtime. |
-| `build_failed` | Read `log_tail`, fix the build (or add a Dockerfile), and deploy again. |
+| `build_failed` | Read `log_tail`, fix the build (add a `Dockerfile` if there's none), and deploy again. |
 | `start_failed` | Make the app listen on `0.0.0.0:$PORT`, then deploy again. |
 | `deploy_timeout` | The deploy is still running. Run `nimbus status`. |
 | `app_not_found` | There's no such app, or it isn't the user's. Check `nimbus list`. |

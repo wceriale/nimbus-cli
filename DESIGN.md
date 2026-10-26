@@ -115,7 +115,7 @@ nimbus docs                the agent guide, printed as markdown
 **`nimbus deploy`**
 - **No manifest:** it writes `nimbus.yaml`, taking `name` from the directory name. There's no `nimbus init`.
 - **Upload:** it respects `.gitignore` and always skips `.git`, `node_modules`, `.venv`, `__pycache__`, and **`.env*`**, because apps hold no secrets. The limit is 100 MB.
-- **Build:** it uses the Dockerfile if there is one, otherwise buildpacks (Python, Node, Go).
+- **Build:** v0.1 needs a `Dockerfile` at the app's root. Without one, the deploy fails with `build_failed` and a hint to add one. Buildpacks may come later.
 - **Waiting:** it waits until the new version serves traffic, up to 10 minutes. A build takes 1–3 minutes, so the agent guide tells agents to raise their command timeout, or to use `--no-wait` and then poll `nimbus status`. Once the upload finishes, killing the CLI doesn't stop the deploy.
 - **Unchanged source:** if the source matches the live version, it creates no new version and returns `"unchanged": true`.
 - **Who can see it:** after the first deploy, only the deployer can open the app, and the output says so:
@@ -184,7 +184,7 @@ This is the whole file in v0.1:
 name: renewal-desk      # required; becomes renewal-desk.<org>.<apps-domain>
 port: 8080              # optional; the app receives it as $PORT
 ```
-The runtime is detected, and sharing is a command. `scopes` returns with connectors in v0.2.
+The app's `Dockerfile` defines its runtime, and sharing is a command. `scopes` returns with connectors in v0.2.
 
 ## The app contract
 Without docs, this is what agents get wrong, so `nimbus docs` opens with it.
@@ -217,7 +217,7 @@ Outline of `docs/agent-guide.md`:
 7. Limits: upload size, command timeouts, no websockets, sharing only inside the org
 
 **The agent usability eval** checks whether the docs work, and it gates the v0.1 release:
-- **Fixture apps (3):** a Flask app with no Dockerfile, a Next.js app, and a Dockerfile app hardcoded to port 5000.
+- **Fixture apps (3):** a Flask app with no Dockerfile (the agent has to write one), a Next.js app, and a Dockerfile app hardcoded to port 5000.
 - **Prompt:** one prompt and nothing else: "Install the Nimbus CLI from github.com/wceriale/nimbus-cli, deploy this app, and share it with <email>."
 - **From scratch:** in an empty directory, one prompt: "Install the Nimbus CLI from github.com/wceriale/nimbus-cli, then build a React app where my team can track <thing>, keep the data in SQLite, deploy it, and share it with <email>."
 - **Agents:** run it in Claude Code, Codex, and Cursor.
@@ -284,6 +284,7 @@ Layout:
 | 2026-10-26 | v0.1 apps store data in `$NIMBUS_DATA_DIR`, not `$DATABASE_URL` | SQLite is the simplest store for small tools, and a directory keeps apps portable if the runtime changes. |
 | 2026-10-26 | No `scopes`, gateway, or outbound internet in v0.1 | Ship hosting, sign-in, and sharing first. |
 | 2026-10-26 | No org-creation command: the org is the Google Workspace domain | The first login from an allowed domain creates it, so a new user has nothing extra to run. |
+| 2026-10-26 | v0.1 deploys need a Dockerfile; there are no buildpacks | One build path that's smaller and faster, and agents write Dockerfiles easily. Buildpacks can come later. |
 | 2026-10-26 | The Claude Code skill and a React + SQLite example are P0 | The agent has to know the app contract before it writes code, not after its first deploy fails. |
 
 ## Open questions
