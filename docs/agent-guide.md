@@ -1,6 +1,6 @@
 # Nimbus agent guide
 
-Nimbus runs a web app at a private URL behind the company's sign-in and shares it by email. Every data access inside the app runs as the person viewing it. Use Nimbus when the user wants coworkers to use something you built: a dashboard, a form, a small internal tool. Nimbus hosts the code you already wrote, so there's nothing to rebuild in another product.
+Nimbus runs a web app at a private URL behind the company's Google sign-in and shares it by email. The app is told who's viewing it, so it never needs its own login. Use Nimbus when the user wants coworkers to use something you built: a dashboard, a form, a small internal tool. Nimbus hosts the code you already wrote, so there's nothing to rebuild in another product.
 
 **How to read the output.** When stdout isn't a terminal, or with `--json`, every command prints exactly one JSON object on stdout:
 - **Success:** `{"ok": true, "data": {…}}` with exit code 0.
@@ -41,25 +41,34 @@ After the first deploy, only the user who deployed it can open the app.
 - **Not in the manifest:** sharing isn't part of `nimbus.yaml`, and redeploying never changes who has access.
 
 ## Writing an app that runs on Nimbus
-Items marked *(planned)* aren't available yet. Don't rely on them.
 1. **Listen on `0.0.0.0:$PORT`.** Read the port from the `PORT` environment variable. If the app has to use a fixed port, set `port:` in `nimbus.yaml` to the same number.
 2. **Don't build a login.** Nimbus signs the viewer in before any request reaches the app, and puts the viewer's email in the `X-Viewer-Email` request header. Trust that header: only Nimbus can reach the app. If the header is missing, the app is running locally, so fall back to a placeholder.
-3. **Don't put secrets in the app.** That means no API keys in code, and `.env` files aren't uploaded anyway. *(planned)* Read company data through `$NIMBUS_GATEWAY`, passing along the `X-Viewer-Token` request header, so every read runs as the viewer.
-4. **Keep state out of the filesystem.** The disk is temporary. The app also sleeps when nobody is using it, and waking it takes a few seconds. *(planned)* Use `$DATABASE_URL` for storage.
-5. **Use plain HTTP.** Websockets aren't supported, and requests time out after 5 minutes.
-6. *(planned)* **No outbound internet.** Only the gateway is reachable.
+3. **React and other single-page apps need a small server.** Browser code can't read request headers. Serve the built frontend from a server that also exposes `GET /api/me`, which returns the `X-Viewer-Email` header. The same server owns the data.
+4. **Keep state in `$NIMBUS_DATA_DIR`.** On Nimbus it's `/data`, and it survives restarts, idle stops, and redeploys. Everything else on disk is wiped. SQLite works well there. Locally, default the directory to `./data`.
+5. **Don't put secrets in the app.** That means no API keys in code, and `.env` files aren't uploaded anyway.
+6. **No outbound internet.** The build can download packages, but the running app can't call outside APIs or databases. Requests made by the viewer's browser, such as CDNs and fonts, aren't affected.
+7. **One instance, which sleeps when idle.** After 15 minutes without requests the app stops. The next request starts it again, which takes a second or two.
+8. **Use plain HTTP.** Websockets aren't supported, and requests time out after 5 minutes.
 
-A minimal Flask app:
+A minimal Flask app with SQLite:
 ```python
-import os
+import os, sqlite3
 from flask import Flask, request
+
+DATA_DIR = os.environ.get("NIMBUS_DATA_DIR", "./data")
+os.makedirs(DATA_DIR, exist_ok=True)
+db = sqlite3.connect(os.path.join(DATA_DIR, "app.db"), check_same_thread=False)
+db.execute("CREATE TABLE IF NOT EXISTS visits (email TEXT, at TEXT DEFAULT CURRENT_TIMESTAMP)")
 
 app = Flask(__name__)
 
 @app.get("/")
 def home():
     viewer = request.headers.get("X-Viewer-Email", "local-dev@example.com")
-    return f"Hello, {viewer}"
+    with db:
+        db.execute("INSERT INTO visits (email) VALUES (?)", (viewer,))
+    count = db.execute("SELECT COUNT(*) FROM visits WHERE email = ?", (viewer,)).fetchone()[0]
+    return f"Hello, {viewer}. Visits: {count}"
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", "8080")))
@@ -69,8 +78,6 @@ if __name__ == "__main__":
 ```yaml
 name: renewal-desk      # required: 3–40 lowercase letters, digits, hyphens; becomes the URL
 port: 8080              # optional: the app receives it as $PORT
-scopes:                 # optional (planned): data the app reads as the viewer
-  - google.sheets.read
 ```
 The file has no other fields. A `share:` field is an error, because sharing is a command.
 
@@ -99,4 +106,5 @@ The file has no other fields. A `share:` field is an error, because sharing is a
 - **Upload:** 100 MB compressed, after the skips listed under Deploying.
 - **Deploy wait:** 10 minutes.
 - **Requests:** time out after 5 minutes. No websockets.
+- **Runtime:** one instance per app, no outbound internet, and a stop after 15 idle minutes.
 - **Sharing:** inside the org only. Groups aren't supported yet.

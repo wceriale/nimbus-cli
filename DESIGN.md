@@ -2,7 +2,9 @@
 
 `nimbus` is how agents use Nimbus. This file is both the CLI's spec and its feature tracker.
 
-Last updated 2026-10-21. Status: design only; no release yet. Domains ending in `.example` are placeholders until real ones are chosen.
+Last updated 2026-10-26. Status: v0.0.1 released; no server yet. Domains ending in `.example` are placeholders until real ones are chosen.
+
+**v0.1 scope:** hosting, Google sign-in, and sharing. Apps keep their data in a persistent `/data` directory (SQLite works well there) and have no outside data access yet. Connectors and `scopes` come in v0.2.
 
 ## Principles
 1. **The agent is the user.** A human does one thing, once: approve `nimbus login` in a browser.
@@ -11,6 +13,23 @@ Last updated 2026-10-21. Status: design only; no release yet. Domains ending in 
 4. **Few commands, few flags.** The core loop is `login → deploy → share`. Anything beyond that has to earn its place.
 5. **The docs ship inside the binary** (`nimbus docs`), so they always match the installed version.
 6. **The CLI is public and holds no power.** All authorization happens on the server.
+
+## First-run story
+What a new user does in v0.1, from nothing to a coworker using the app. It covers only what the builder, their agent, and the viewer see.
+
+**Builder side**
+1. **Install:** the agent runs `curl -fsSL https://raw.githubusercontent.com/wceriale/nimbus-cli/main/install.sh | sh`.
+2. **Sign in:** the agent runs `nimbus login` and shows the user a link. The user signs in with their Google Workspace account. There's no separate sign-up or org setup.
+3. **Learn the rules:** the agent runs `nimbus docs` (or loads the skill) before it writes any code.
+4. **Build:** the agent writes the app, starting from the React example.
+5. **Deploy:** the agent runs `nimbus deploy` and gets the app's URL. At first, only the person who deployed it can open it.
+6. **Share:** the agent runs `nimbus share lena@acme.com`. Only coworkers in the same Google Workspace can be added.
+
+**Viewer side**
+1. Lena opens the URL and signs in with her Google Workspace account. She needs no other account.
+2. If she has access, she sees the app, and the app knows who she is. If not, she sees a page telling her to ask the owner.
+
+Personal @gmail.com accounts aren't supported in v0.1.
 
 ## Tracker
 P0 is needed for the first end-to-end deploy. P1 must land before anyone outside the team uses it. Status values are todo, doing, and done. **"Done" means implemented and tested against `internal/fakeapi`.** Nothing has run against a real server yet, because there isn't one.
@@ -33,11 +52,13 @@ P0 is needed for the first end-to-end deploy. P1 must land before anyone outside
 | 14 | `--help` for every command, with one example and the JSON it returns | P0 | done |
 | 15 | Agent usability eval (see [Docs for agents](#docs-for-agents)); needs a release and a server | P0 | todo |
 | 21 | Fake control plane (`internal/fakeapi`, `cmd/nimbus-fakeapi`) for tests and trying the CLI by hand | P0 | done |
+| 19 | Claude Code skill and AGENTS.md snippet, generated from the guide | P0 | todo |
+| 22 | `examples/react-sqlite`: React (Vite) served by a small Node server, `GET /api/me`, SQLite in `$NIMBUS_DATA_DIR` | P0 | todo |
+| 23 | Manifest: reject `scopes` until connectors exist (the parser accepts it today) | P0 | todo |
 | 16 | `nimbus destroy`, `nimbus rollback`, `nimbus logout`, `nimbus upgrade` | P1 | todo |
 | 17 | `nimbus share --org` (anyone in the org who has the link) | P1 | todo |
-| 18 | `scopes` in the manifest, plus consent errors | P1 | todo |
-| 19 | Claude Code skill and AGENTS.md snippet, generated from the guide | P1 | todo |
 | 20 | CI check that the guide's examples still run | P1 | todo |
+| 18 | `scopes` in the manifest, plus consent errors | v0.2 | todo |
 
 ## Install
 Public GitHub repos need no auth, so an agent can install with one curl:
@@ -81,7 +102,7 @@ nimbus docs                the agent guide, printed as markdown
   Credentials are only ever sent to the API that issued them.
 
 ### How the core commands behave
-**`nimbus login`** runs an RFC 8628 device flow against the Nimbus control plane, which handles the company sign-in (Google or Okta). The same flow works for local, headless, and cloud agents.
+**`nimbus login`** runs an RFC 8628 device flow against the Nimbus control plane, which handles the company sign-in (Google in v0.1; Okta later). The same flow works for local, headless, and cloud agents.
 - **In a terminal:** it prints a URL and a code, opens the browser, and waits.
 - **Not in a terminal (agents):** it returns at once:
   ```json
@@ -119,6 +140,7 @@ nimbus docs                the agent guide, printed as markdown
 - `nimbus upgrade`, which re-runs the installer's download for the latest release
 
 ### Later
+- `scopes` in the manifest and data access as the viewer through a gateway (v0.2)
 - Sharing with groups (`share group:<name>`, from Okta groups)
 - `--role editor`
 - `nimbus mcp`
@@ -161,19 +183,18 @@ This is the whole file in v0.1:
 ```yaml
 name: renewal-desk      # required; becomes renewal-desk.<org>.<apps-domain>
 port: 8080              # optional; the app receives it as $PORT
-scopes:                 # optional, P1: data the app reads as the viewer
-  - google.sheets.read
 ```
-The runtime is detected, and sharing is a command.
+The runtime is detected, and sharing is a command. `scopes` returns with connectors in v0.2.
 
 ## The app contract
-Without docs, this is what agents get wrong, so `nimbus docs` opens with it. Items marked [planned] arrive after the first release.
+Without docs, this is what agents get wrong, so `nimbus docs` opens with it.
 1. Listen on `0.0.0.0:$PORT`.
-2. Don't build a login. The viewer's email is in the `X-Viewer-Email` request header. Trust it, because only Nimbus can reach the app. If the header is missing, the app is running locally.
-3. Don't hold secrets: no API keys in the code, and `.env*` files aren't uploaded. Reach data through `$NIMBUS_GATEWAY` with the `X-Viewer-Token` header, so every read runs as the viewer. [planned]
-4. Treat the disk as temporary. The app also sleeps when idle, and a cold start takes a few seconds. Keep state in `$DATABASE_URL`. [planned]
-5. Use plain HTTP. There are no websockets, and requests time out after 5 minutes.
-6. Outbound internet is blocked; only the gateway is reachable. [planned]
+2. Don't build a login. The viewer's email is in the `X-Viewer-Email` request header. Trust it, because only Nimbus can reach the app. If the header is missing, the app is running locally. Browser code can't read request headers, so a React app's server exposes `GET /api/me`, which returns the header.
+3. Don't hold secrets: no API keys in the code, and `.env*` files aren't uploaded.
+4. Keep state in `$NIMBUS_DATA_DIR` (`/data` on Nimbus). It survives restarts, idle stops, and redeploys. Everything else on disk is wiped. SQLite works well there. Locally, default the directory to `./data`.
+5. Each app runs as a single instance. It sleeps after 15 minutes without requests, and the next request wakes it in a second or two.
+6. Use plain HTTP. There are no websockets, and requests time out after 5 minutes.
+7. The running app has no outbound internet. The build does, so `npm install` and `pip install` work, but the app can't call outside APIs. Requests the viewer's browser makes (CDNs, fonts) aren't affected.
 
 ## Docs for agents
 Everything comes from one source and is published in several places:
@@ -184,7 +205,7 @@ Everything comes from one source and is published in several places:
 | `nimbus <cmd> --help` | The agent, in the middle of a task | Usage, flags, one example, and the JSON it returns |
 | README.md | An agent or human landing on the repo | Opens with an agents section: the install line, then "run `nimbus docs`" |
 | `install.sh` output | The agent, right after install | Where it installed, then `nimbus login`, then `nimbus docs` |
-| Skill / AGENTS.md snippet (P1) | Agents in repos that use Nimbus | When to use Nimbus, then "run `nimbus docs`" |
+| Skill / AGENTS.md snippet (P0) | Agents, before they write an app for Nimbus | When to use Nimbus, the app contract, then "run `nimbus docs`" |
 
 Outline of `docs/agent-guide.md`:
 1. What Nimbus does and when to use it (3 lines)
@@ -198,8 +219,9 @@ Outline of `docs/agent-guide.md`:
 **The agent usability eval** checks whether the docs work, and it gates the v0.1 release:
 - **Fixture apps (3):** a Flask app with no Dockerfile, a Next.js app, and a Dockerfile app hardcoded to port 5000.
 - **Prompt:** one prompt and nothing else: "Install the Nimbus CLI from github.com/wceriale/nimbus-cli, deploy this app, and share it with <email>."
+- **From scratch:** in an empty directory, one prompt: "Install the Nimbus CLI from github.com/wceriale/nimbus-cli, then build a React app where my team can track <thing>, keep the data in SQLite, deploy it, and share it with <email>."
 - **Agents:** run it in Claude Code, Codex, and Cursor.
-- **Pass:** the app is live and shared, and the only human step was approving the login.
+- **Pass:** the app is live and shared, the only human step was approving the login, and (for the from-scratch run) the app shows the viewer's email and its data survives a redeploy.
 - **Tracked:** pass rate, tool calls per run, and which errors agents hit. Every failure turns into a doc fix or a better `hint`.
 
 ## API the CLI needs (control plane, v1)
@@ -259,6 +281,10 @@ Layout:
 | 2026-10-21 | Sharing changes go through one all-or-nothing `PATCH` | `nimbus share a b c` is one call, and a bad address doesn't leave half the list applied. |
 | 2026-10-21 | Non-owners get `404 app_not_found`, never `403` | App names don't leak across the org. `permission_denied` is reserved for when roles exist. |
 | 2026-10-21 | The default API is a `.example` placeholder that the CLI recognizes | The CLI can ship before the backend does, can't leak a token to a domain we don't own, and tells agents plainly that the backend isn't live. |
+| 2026-10-26 | v0.1 apps store data in `$NIMBUS_DATA_DIR`, not `$DATABASE_URL` | SQLite is the simplest store for small tools, and a directory keeps apps portable if the runtime changes. |
+| 2026-10-26 | No `scopes`, gateway, or outbound internet in v0.1 | Ship hosting, sign-in, and sharing first. |
+| 2026-10-26 | No org-creation command: the org is the Google Workspace domain | The first login from an allowed domain creates it, so a new user has nothing extra to run. |
+| 2026-10-26 | The Claude Code skill and a React + SQLite example are P0 | The agent has to know the app contract before it writes code, not after its first deploy fails. |
 
 ## Open questions
 - Real domains for the API and for apps. Until then, docs use `.example`, and the CLI's default is the `.example` placeholder.
