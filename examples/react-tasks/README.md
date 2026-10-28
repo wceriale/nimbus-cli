@@ -6,6 +6,7 @@ A small Trello-style board with three columns. You can drag cards between column
 - **Who's viewing:** Nimbus signs people in and passes their email in the `X-Viewer-Email` header. The server stamps new cards with it and returns it from `GET /api/me`, because browser code can't read request headers. There's no login code. Locally the header is missing, so the server uses `local-dev@example.com`.
 - **Data:** SQLite at `$NIMBUS_DATA_DIR/tasks.db`. That's `/data` on Nimbus and `./data` locally. It's the only directory that survives restarts and redeploys.
 - **Runtime:** the server listens on `0.0.0.0:$PORT`, holds no secrets, and makes no outbound calls. Nimbus runs it as a non-root user on a read-only filesystem, so it writes only to the data directory.
+- **Logs:** the server prints one line per request to stdout, e.g. `POST /api/cards 201 4ms lena@acme.com`. That's what `nimbus logs` shows.
 
 ## Layout
 ```

@@ -14,6 +14,8 @@ COPY app.py seed.py ./
 COPY templates/ templates/
 
 # One worker, because SQLite and Nimbus run one instance; threads handle concurrent
-# requests. --access-logfile - sends access logs to stdout.
+# requests. The access log goes to stdout, which is what `nimbus logs` shows: one line
+# per request, e.g. "GET / 200 12ms lena@acme.com", without query strings.
 CMD exec gunicorn --bind "0.0.0.0:${PORT:-8080}" --workers 1 --threads 8 \
-    --access-logfile - app:app
+    --access-logfile - --access-logformat '%(m)s %(U)s %(s)s %(M)sms %({x-viewer-email}i)s' \
+    app:app

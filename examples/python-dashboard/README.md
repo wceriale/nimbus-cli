@@ -11,7 +11,7 @@ It shows the two things every Nimbus app does:
 | `app.py` | Database setup, queries, chart geometry, and the one route |
 | `seed.py` | The fake data, and seeding that's safe if two processes start at once |
 | `templates/` | The page, and the SVG chart macros |
-| `Dockerfile` | gunicorn on `0.0.0.0:$PORT`, one worker with threads |
+| `Dockerfile` | gunicorn on `0.0.0.0:$PORT`, one worker with threads, and an access log line per request with the viewer (what `nimbus logs` shows) |
 
 ## Run it locally
 ```sh
@@ -30,7 +30,7 @@ The AEs are maya.chen, jordan.reyes, aisha.patel, sam.okafor, hannah.weber, and 
 docker build -t sales-dashboard .
 mkdir -p data && chmod 777 data   # the container runs as uid 10001
 docker run --rm -p 8080:8080 --read-only --tmpfs /tmp --user 10001:10001 --cap-drop ALL \
-  -e PORT=8080 -e NIMBUS_DATA_DIR=/data -v "$PWD/data:/data" sales-dashboard
+  -e PORT=8080 -e NIMBUS_DATA_DIR=/data -e HOME=/tmp -v "$PWD/data:/data" sales-dashboard
 ```
 
 ## Deploy it

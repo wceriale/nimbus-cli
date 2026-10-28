@@ -52,6 +52,7 @@ After the first deploy, only the user who deployed it can open the app.
 9. **One instance, which sleeps when idle.** After 15 minutes without requests the app stops: it gets SIGTERM, then 10 seconds to exit. The next request starts it again, which takes a second or two.
 10. **Expired sign-ins reach `fetch` as a 401.** When a viewer's sign-in has expired, page loads are sent to sign in again, but `fetch` calls get `401` with `{"error":"not_signed_in"}`. Reload the page when you see it.
 11. **Use plain HTTP.** Websockets aren't supported, and requests time out after 5 minutes.
+12. **Log to stdout.** `nimbus logs` shows only what the app prints to stdout and stderr. Log one line per request (method, path, status, and the `X-Viewer-Email` viewer) and every error. Leave out query strings and request bodies.
 
 Two complete examples, both with SQLite, are in the CLI's repo at https://github.com/wceriale/nimbus-cli/tree/main/examples: `react-tasks` (a task board: React with a small Node server) and `python-dashboard` (a stats dashboard: Flask and gunicorn). Copy one as a starting point. For Node with SQLite on a `node:*-slim` image, install with `npm ci --ignore-scripts`: `better-sqlite3` ships prebuilt binaries, but without that flag its install step looks for Python and fails the build with `gyp ERR! find Python`.
 

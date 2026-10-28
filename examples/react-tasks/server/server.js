@@ -116,10 +116,22 @@ function findCard(id) {
 // ---- HTTP -------------------------------------------------------------------
 
 const app = express();
-app.use("/api", express.json({ limit: "10kb" }));
 
 // Nimbus sets this header on every request. It's only missing when the app runs locally.
 const viewer = (req) => req.get("X-Viewer-Email") || "local-dev@example.com";
+
+// One line per request on stdout, which is what `nimbus logs` shows, e.g.
+// "POST /api/cards 201 4ms lena@acme.com". Query strings are left out, so nothing in them is logged.
+app.use((req, res, next) => {
+  const start = performance.now();
+  res.on("finish", () => {
+    const ms = Math.round(performance.now() - start);
+    console.log(`${req.method} ${req.originalUrl.split("?")[0]} ${res.statusCode} ${ms}ms ${viewer(req)}`);
+  });
+  next();
+});
+
+app.use("/api", express.json({ limit: "10kb" }));
 
 // Browser code can't read request headers, so the frontend asks who's signed in.
 app.get("/api/me", (req, res) => res.json({ email: viewer(req) }));
