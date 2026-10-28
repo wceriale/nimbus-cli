@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -24,6 +25,9 @@ type harness struct {
 	srv  *httptest.Server
 	cfg  string
 	env  map[string]string
+
+	opened  []string // URLs the CLI tried to open in a browser
+	onSleep func()   // runs when the CLI sleeps between polls, if set
 }
 
 func newHarness(t *testing.T) *harness {
@@ -47,15 +51,22 @@ func (h *harness) run(dir string, args ...string) *result {
 	h.t.Helper()
 	var stdout, stderr bytes.Buffer
 	a := &App{
-		Stdout:      &stdout,
-		Stderr:      &stderr,
-		Getenv:      func(k string) string { return h.env[k] },
-		WorkDir:     dir,
-		ConfigDir:   h.cfg,
-		HTTPClient:  h.srv.Client(),
-		OpenBrowser: func(string) error { return errors.New("no browser in tests") },
-		Sleep:       func(time.Duration) {},
-		Now:         time.Now,
+		Stdout:     &stdout,
+		Stderr:     &stderr,
+		Getenv:     func(k string) string { return h.env[k] },
+		WorkDir:    dir,
+		ConfigDir:  h.cfg,
+		HTTPClient: h.srv.Client(),
+		OpenBrowser: func(u string) error {
+			h.opened = append(h.opened, u)
+			return errors.New("no browser in tests")
+		},
+		Sleep: func(time.Duration) {
+			if h.onSleep != nil {
+				h.onSleep()
+			}
+		},
+		Now: time.Now,
 	}
 	r := &result{code: a.Run(args), stdout: stdout.String(), stderr: stderr.String()}
 	dec := json.NewDecoder(&stdout)
@@ -149,6 +160,82 @@ func TestLoginIsTwoStepForAgents(t *testing.T) {
 	}
 	if d := h.ok(dir, "whoami"); d["email"] != "you@acme.com" || d["auth"] != "login" {
 		t.Errorf("whoami = %v", d)
+	}
+}
+
+// A waiting login that resumes an earlier run's code shows the code again and
+// reopens the browser, since that run's tab may be gone. If the code was
+// already approved, it just finishes.
+func TestLoginWaitResumesPendingCode(t *testing.T) {
+	h := newHarness(t)
+	first := h.ok(t.TempDir(), "login")
+	h.opened = nil
+	h.onSleep = h.fake.ApproveAll
+	r := h.run(t.TempDir(), "login", "--wait")
+	if !r.OK || r.Data["status"] != "logged_in" {
+		t.Fatalf("resumed login = %+v, %+v", r.Data, r.Error)
+	}
+	url := first["verification_url"].(string)
+	if !strings.Contains(r.stderr, url) || !strings.Contains(r.stderr, first["user_code"].(string)) {
+		t.Errorf("stderr = %q, want the URL and code again", r.stderr)
+	}
+	if len(h.opened) != 1 || h.opened[0] != url {
+		t.Errorf("opened %v, want %s once", h.opened, url)
+	}
+
+	h = newHarness(t)
+	h.ok(t.TempDir(), "login")
+	h.fake.ApproveAll()
+	h.opened = nil
+	r = h.run(t.TempDir(), "login", "--wait")
+	if !r.OK || r.Data["status"] != "logged_in" || len(h.opened) != 0 || r.stderr != "" {
+		t.Errorf("resuming an approved code = %+v, opened %v, stderr %q; want logged_in quietly", r.Data, h.opened, r.stderr)
+	}
+}
+
+func TestLogout(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+	credsPath := filepath.Join(h.cfg, "credentials.json")
+	var creds map[string]any
+	if b, err := os.ReadFile(credsPath); err != nil || json.Unmarshal(b, &creds) != nil {
+		t.Fatalf("credentials: %v", err)
+	}
+
+	d := h.ok(t.TempDir(), "logout")
+	if d["status"] != "logged_out" || d["revoked"] != true || d["email"] != "you@acme.com" || d["api_url"] != h.srv.URL {
+		t.Fatalf("logout = %v", d)
+	}
+	if _, err := os.Stat(credsPath); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("credentials file after logout: %v", err)
+	}
+	req, _ := http.NewRequest("GET", h.srv.URL+"/v1/me", nil)
+	req.Header.Set("Authorization", "Bearer "+creds["access_token"].(string))
+	resp, err := h.srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("old access token after logout: %s, want 401", resp.Status)
+	}
+	h.fail("not_logged_in", t.TempDir(), "whoami")
+
+	if d := h.ok(t.TempDir(), "logout"); d["status"] != "logged_out" || d["revoked"] != false || d["api_url"] != nil {
+		t.Errorf("logout while logged out = %v", d)
+	}
+}
+
+func TestLogoutWithoutServer(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+	h.srv.Close()
+	d := h.ok(t.TempDir(), "logout")
+	if d["revoked"] != false || !strings.Contains(d["next"].(string), "Couldn't reach the server") {
+		t.Errorf("logout without a server = %v", d)
+	}
+	if _, err := os.Stat(filepath.Join(h.cfg, "credentials.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("credentials file after logout: %v", err)
 	}
 }
 

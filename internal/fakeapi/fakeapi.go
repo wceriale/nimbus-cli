@@ -70,6 +70,7 @@ type device struct {
 type session struct {
 	email   string
 	expires time.Time
+	refresh string // the refresh token issued with it
 }
 
 type app struct {
@@ -173,6 +174,7 @@ func (f *Fake) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /oauth/device/code", f.deviceCode)
 	mux.HandleFunc("POST /oauth/token", f.token)
+	mux.HandleFunc("POST /oauth/revoke", f.revoke)
 	mux.HandleFunc("GET /device", f.devicePage)
 	mux.HandleFunc("POST /device", f.deviceDecide)
 	mux.HandleFunc("PUT /_upload/{id}", f.receiveUpload)
@@ -251,9 +253,26 @@ func (f *Fake) token(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// revoke forgets a refresh token and the access tokens issued with it. An
+// unknown token gets 200 too (RFC 7009).
+func (f *Fake) revoke(w http.ResponseWriter, r *http.Request) {
+	if r.FormValue("client_id") != "nimbus-cli" {
+		oauthErr(w, "invalid_client")
+		return
+	}
+	rt := r.FormValue("token")
+	delete(f.refresh, rt)
+	for at, s := range f.access {
+		if s.refresh == rt {
+			delete(f.access, at)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{})
+}
+
 func (f *Fake) issue(w http.ResponseWriter, email string) {
 	at, rt := randID("at"), randID("rt")
-	f.access[at] = session{email: email, expires: time.Now().Add(f.AccessTTL)}
+	f.access[at] = session{email: email, expires: time.Now().Add(f.AccessTTL), refresh: rt}
 	f.refresh[rt] = email
 	writeJSON(w, http.StatusOK, map[string]any{
 		"access_token":  at,

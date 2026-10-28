@@ -34,6 +34,7 @@ stdout isn't a terminal.`,
 	})
 	root.AddCommand(
 		a.loginCmd(),
+		a.logoutCmd(),
 		a.whoamiCmd(),
 		a.deployCmd(),
 		a.shareCmd(),

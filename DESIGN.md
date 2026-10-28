@@ -55,7 +55,8 @@ P0 is needed for the first end-to-end deploy. P1 must land before anyone outside
 | 19 | Claude Code skill and AGENTS.md snippet, generated from the guide | P0 | todo |
 | 22 | Examples with SQLite in `$NIMBUS_DATA_DIR`: `examples/react-tasks` (task board: React + a small Node server with `GET /api/me`) and `examples/python-dashboard` (stats dashboard: Flask + gunicorn) | P0 | done |
 | 23 | Manifest: reject `scopes` until connectors exist (the parser accepts it today) | P0 | todo |
-| 16 | `nimbus destroy`, `nimbus rollback`, `nimbus logout`, `nimbus upgrade` | P1 | todo |
+| 16 | `nimbus destroy`, `nimbus rollback`, `nimbus upgrade` | P1 | todo |
+| 24 | `nimbus logout`: revoke the login on the server (`POST /oauth/revoke`), then delete it locally | P1 | done |
 | 17 | `nimbus share --org` (anyone in the org who has the link) | P1 | todo |
 | 20 | CI check that the guide's examples still run | P1 | todo |
 | 18 | `scopes` in the manifest, plus consent errors | v0.2 | todo |
@@ -84,6 +85,7 @@ Notes:
 ### P0
 ```
 nimbus login               device-flow login; the only step that needs a human
+nimbus logout              revoke this machine's login and delete it
 nimbus whoami              email, org, API URL, CLI version; use as a preflight check
 nimbus deploy [dir]        build and ship a directory (default .), then print the URL
 nimbus share <email>...    give viewers access
@@ -133,7 +135,6 @@ nimbus docs                the agent guide, printed as markdown
 - `nimbus destroy [app] --yes`
 - `nimbus rollback [app] [--to <version>]`
 - `nimbus share --org`
-- `nimbus logout`
 - `nimbus upgrade`, which re-runs the installer's download for the latest release
 
 ### Later

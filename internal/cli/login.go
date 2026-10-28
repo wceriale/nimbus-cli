@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -105,7 +106,7 @@ func (a *App) login(ctx context.Context, wait bool) (any, error) {
 	}
 
 	if pending != nil && pending.APIURL == base && a.Now().Before(pending.ExpiresAt) {
-		res, err := a.pollLogin(ctx, c, store, pending, wait)
+		res, err := a.pollLogin(ctx, c, store, pending, wait, true)
 		if !errors.Is(err, errLoginExpired) {
 			return res, err
 		}
@@ -132,7 +133,7 @@ func (a *App) login(ctx context.Context, wait bool) (any, error) {
 		return a.pendingResult(pending, &opened), nil
 	}
 	a.printer().Progress("Open %s and approve the code %s. Waiting…", pending.VerificationURL, pending.UserCode)
-	res, err := a.pollLogin(ctx, c, store, pending, true)
+	res, err := a.pollLogin(ctx, c, store, pending, true, false)
 	if errors.Is(err, errLoginExpired) {
 		return nil, output.Errorf("login_expired", "Run `nimbus login` again for a new code.", "The login code expired before it was approved.")
 	}
@@ -140,8 +141,10 @@ func (a *App) login(ctx context.Context, wait bool) (any, error) {
 }
 
 // pollLogin checks a pending device code once, or until it resolves when
-// wait is set.
-func (a *App) pollLogin(ctx context.Context, c *api.Client, store config.Store, p *config.PendingLogin, wait bool) (any, error) {
+// wait is set. With remind, a code that's still pending is shown again and
+// the browser reopened before waiting, because the code came from an earlier
+// run whose browser tab may be gone.
+func (a *App) pollLogin(ctx context.Context, c *api.Client, store config.Store, p *config.PendingLogin, wait, remind bool) (any, error) {
 	for {
 		tok, err := c.DeviceToken(ctx, p.DeviceCode)
 		if err == nil {
@@ -173,6 +176,11 @@ func (a *App) pollLogin(ctx context.Context, c *api.Client, store config.Store, 
 		}
 		if !wait {
 			return a.pendingResult(p, nil), nil
+		}
+		if remind {
+			remind = false
+			a.OpenBrowser(p.VerificationURL)
+			a.printer().Progress("Open %s and approve the code %s. Waiting…", p.VerificationURL, p.UserCode)
 		}
 		if !a.Now().Before(p.ExpiresAt) {
 			_ = store.DeletePending()
@@ -222,4 +230,72 @@ func (a *App) pendingResult(p *config.PendingLogin, browserOpened *bool) *loginR
 
 func loggedIn(base string, me *api.Me, auth string) *loginResult {
 	return &loginResult{Status: "logged_in", Email: me.Email, Org: me.Org.Slug, APIURL: base, Auth: auth}
+}
+
+func (a *App) logoutCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "logout",
+		Short: "Log out: revoke the stored login and delete it from this machine",
+		Long: `Revoke the stored login on the server, then delete it from this machine,
+along with any login that's waiting for approval.
+
+The local login is deleted even if the server can't be reached ("revoked":
+false). Running it while logged out succeeds and does nothing. It doesn't
+affect NIMBUS_TOKEN.`,
+		Example: `  $ nimbus logout
+  {"ok":true,"data":{"status":"logged_out","api_url":"https://api.nimbostrat.dev","email":"you@acme.com","revoked":true}}`,
+		Args: noArgs,
+		RunE: a.run(func(ctx context.Context, _ []string) (any, error) {
+			return a.logout(ctx)
+		}),
+	}
+}
+
+type logoutResult struct {
+	Status  string `json:"status"` // logged_out
+	APIURL  string `json:"api_url,omitempty"`
+	Email   string `json:"email,omitempty"`
+	Revoked bool   `json:"revoked"` // the server revoked the login
+	Next    string `json:"next,omitempty"`
+}
+
+func (r *logoutResult) Text() string {
+	var s string
+	switch {
+	case r.APIURL == "":
+		s = "Not logged in."
+	case r.Revoked:
+		s = fmt.Sprintf("Logged out of %s (%s).", r.APIURL, r.Email)
+	default:
+		s = fmt.Sprintf("Deleted the login for %s (%s) from this machine.", r.APIURL, r.Email)
+	}
+	if r.Next != "" {
+		s += "\n" + r.Next
+	}
+	return s
+}
+
+func (a *App) logout(ctx context.Context) (any, error) {
+	store := a.store()
+	res := &logoutResult{Status: "logged_out"}
+	var notes []string
+	if creds := store.LoadCredentials(); creds != nil {
+		res.APIURL, res.Email = creds.APIURL, creds.Email
+		// Only ever to the API that issued the token, whatever NIMBUS_API_URL says.
+		res.Revoked = a.client(creds.APIURL).Revoke(ctx, creds.RefreshToken) == nil
+		if !res.Revoked {
+			notes = append(notes, "Couldn't reach the server to revoke the login, so it was only deleted from this machine.")
+		}
+	}
+	if err := store.DeleteCredentials(); err != nil {
+		return nil, err
+	}
+	if err := store.DeletePending(); err != nil {
+		return nil, err
+	}
+	if a.Getenv("NIMBUS_TOKEN") != "" {
+		notes = append(notes, "NIMBUS_TOKEN is still set, so commands still run as that token. Unset it to log out completely.")
+	}
+	res.Next = strings.Join(notes, " ")
+	return res, nil
 }

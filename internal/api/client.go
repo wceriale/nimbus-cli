@@ -77,6 +77,11 @@ func (c *Client) RefreshToken(ctx context.Context, refreshToken string) (*Token,
 	})
 }
 
+// Revoke revokes the login a token belongs to (RFC 7009).
+func (c *Client) Revoke(ctx context.Context, token string) error {
+	return c.postForm(ctx, "/oauth/revoke", url.Values{"token": {token}, "client_id": {ClientID}}, nil)
+}
+
 func (c *Client) token(ctx context.Context, form url.Values) (*Token, error) {
 	var t Token
 	if err := c.postForm(ctx, "/oauth/token", form, &t); err != nil {
