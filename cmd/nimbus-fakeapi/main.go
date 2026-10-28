@@ -1,5 +1,5 @@
 // Command nimbus-fakeapi serves the in-memory fake control plane, so the CLI
-// can be tried by hand before the real server exists. It isn't released.
+// can be tried by hand without a Nimbus account. It isn't released.
 //
 //	go run ./cmd/nimbus-fakeapi
 //	export NIMBUS_API_URL=http://127.0.0.1:8787

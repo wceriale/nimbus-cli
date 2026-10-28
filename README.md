@@ -2,7 +2,7 @@
 
 `nimbus` takes a web app your agent already wrote and runs it at a private URL behind your company's sign-in. You share it with coworkers by email, and the app always knows who's viewing it, so it never needs its own login.
 
-> **Status: early (v0.0.x).** The CLI installs and runs, but the hosted Nimbus backend (`api.nimbostrat.dev`) isn't live yet. To try the whole flow now, point it at the fake API (see [Try it](#try-it)). Progress and spec: [DESIGN.md](DESIGN.md).
+> **Status: early access (v0.0.x).** Nimbus is live at `api.nimbostrat.dev`. People sign in with their Google Workspace account, and their company's domain has to be enabled first. Progress and spec: [DESIGN.md](DESIGN.md).
 
 ## For agents
 Install:
@@ -23,15 +23,6 @@ To pin a version, or install somewhere other than `~/.local/bin`, set `NIMBUS_VE
 
 ## For humans
 The same commands work in a terminal, with readable output. Nimbus is invite-only during early access.
-
-## Try it
-Until the hosted backend exists, run the fake control plane locally. It needs Go 1.24 or newer.
-```sh
-go run github.com/wceriale/nimbus-cli/cmd/nimbus-fakeapi@latest &   # serves on 127.0.0.1:8787
-export NIMBUS_API_URL=http://127.0.0.1:8787
-nimbus login     # open the printed URL, click Approve, then run `nimbus login` again
-nimbus deploy    # in any app directory; the fake "builds" it in a few polls
-```
 
 ## Development
 You need Go 1.24 or newer to build. Users don't need Go: releases are standalone binaries.

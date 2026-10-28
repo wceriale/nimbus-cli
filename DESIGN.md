@@ -2,7 +2,7 @@
 
 `nimbus` is how agents use Nimbus. This file is both the CLI's spec and its feature tracker.
 
-Last updated 2026-10-28. Status: v0.0.1 released; the server runs locally and is going onto a VM. The API is `https://api.nimbostrat.dev`, and apps are `https://<app>.<org>.nimbus-apps.dev`.
+Last updated 2026-10-28. Status: live. The API is `https://api.nimbostrat.dev`, with Google sign-in, and apps run at `https://<app>.<org>.nimbus-apps.dev`. v0.0.1 is released, but it still defaults to the old placeholder API; the next release defaults to the live one.
 
 **v0.1 scope:** hosting, Google sign-in, and sharing. Apps keep their data in a persistent `/data` directory (SQLite works well there) and have no outside data access yet. Connectors and `scopes` come in v0.2.
 
@@ -32,7 +32,7 @@ What a new user does in v0.1, from nothing to a coworker using the app. It cover
 Personal @gmail.com accounts aren't supported in v0.1.
 
 ## Tracker
-P0 is needed for the first end-to-end deploy. P1 must land before anyone outside the team uses it. Status values are todo, doing, and done. **"Done" means implemented and tested against `internal/fakeapi`.** The P0 commands also ran end to end against `nimbus-server` on localhost on 2026-10-28.
+P0 is needed for the first end-to-end deploy. P1 must land before anyone outside the team uses it. Status values are todo, doing, and done. **"Done" means implemented and tested against `internal/fakeapi`.** The P0 commands also ran end to end against `nimbus-server` on localhost on 2026-10-28, and login, deploy, and logs ran against the live server the same day.
 
 | # | Item | Pri | Status |
 |---|---|---|---|
@@ -50,7 +50,7 @@ P0 is needed for the first end-to-end deploy. P1 must land before anyone outside
 | 12 | `cli_outdated`: send `Nimbus-CLI-Version` on every request and surface the server's 426 | P0 | done |
 | 13 | `docs/agent-guide.md` and `nimbus docs`, with a generated command reference | P0 | done |
 | 14 | `--help` for every command, with one example and the JSON it returns | P0 | done |
-| 15 | Agent usability eval (see [Docs for agents](#docs-for-agents)); needs a release and a server | P0 | todo |
+| 15 | Agent usability eval (see [Docs for agents](#docs-for-agents)); needs a release | P0 | todo |
 | 21 | Fake control plane (`internal/fakeapi`, `cmd/nimbus-fakeapi`) for tests and trying the CLI by hand | P0 | done |
 | 19 | Claude Code skill and AGENTS.md snippet, generated from the guide | P0 | todo |
 | 22 | Examples with SQLite in `$NIMBUS_DATA_DIR`: `examples/react-tasks` (task board: React + a small Node server with `GET /api/me`) and `examples/python-dashboard` (stats dashboard: Flask + gunicorn) | P0 | done |
