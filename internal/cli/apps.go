@@ -46,7 +46,7 @@ func (a *App) whoamiCmd() *cobra.Command {
 		Use:   "whoami",
 		Short: "Show who you're logged in as; use it to check the login before other commands",
 		Example: `  $ nimbus whoami
-  {"ok":true,"data":{"email":"you@acme.com","org":"acme","org_name":"Acme","idp":"google","api_url":"https://api.nimbus.example","auth":"login","cli_version":"v0.1.0"}}`,
+  {"ok":true,"data":{"email":"you@acme.com","org":"acme","org_name":"Acme","idp":"google","api_url":"https://api.nimbostrat.dev","auth":"login","cli_version":"v0.1.0"}}`,
 		Args: noArgs,
 		RunE: a.run(func(ctx context.Context, _ []string) (any, error) {
 			sess, err := a.session()
@@ -87,7 +87,7 @@ func (a *App) statusCmd() *cobra.Command {
 While a deploy runs, or after it failed, "latest" holds that version; when it
 failed, latest.log_tail has the end of the log.`,
 		Example: `  $ nimbus status
-  {"ok":true,"data":{"name":"renewal-desk","url":"https://renewal-desk.acme.nimbusapps.example","owner":"you@acme.com","state":"live","live_version":3,"latest_version":3,"shared_with":["you@acme.com","lena@acme.com"],...}}`,
+  {"ok":true,"data":{"name":"renewal-desk","url":"https://renewal-desk.acme.nimbus-apps.dev","owner":"you@acme.com","state":"live","live_version":3,"latest_version":3,"shared_with":["you@acme.com","lena@acme.com"],...}}`,
 		Args: maxArgs(1),
 		RunE: a.run(a.status),
 	}
@@ -162,7 +162,7 @@ func (a *App) listCmd() *cobra.Command {
 		Use:   "list",
 		Short: "List the apps you own",
 		Example: `  $ nimbus list
-  {"ok":true,"data":{"apps":[{"name":"renewal-desk","url":"https://renewal-desk.acme.nimbusapps.example","state":"live",...}]}}`,
+  {"ok":true,"data":{"apps":[{"name":"renewal-desk","url":"https://renewal-desk.acme.nimbus-apps.dev","state":"live",...}]}}`,
 		Args: noArgs,
 		RunE: a.run(func(ctx context.Context, _ []string) (any, error) {
 			sess, err := a.session()
@@ -209,7 +209,7 @@ name in ./nimbus.yaml. Prints everyone who has access afterwards.
 Only addresses in your own org work, and nobody is notified: send them the URL.
 Redeploying never changes who has access.`,
 		Example: `  $ nimbus share lena@acme.com
-  {"ok":true,"data":{"app":"renewal-desk","url":"https://renewal-desk.acme.nimbusapps.example","shared_with":["you@acme.com","lena@acme.com"],"next":"Send them the URL. ..."}}`,
+  {"ok":true,"data":{"app":"renewal-desk","url":"https://renewal-desk.acme.nimbus-apps.dev","shared_with":["you@acme.com","lena@acme.com"],"next":"Send them the URL. ..."}}`,
 		Args: minArgs(1),
 		RunE: a.run(func(ctx context.Context, args []string) (any, error) { return a.updateShares(ctx, args, true) }),
 	}
@@ -220,7 +220,7 @@ func (a *App) unshareCmd() *cobra.Command {
 		Use:   "unshare <email>...",
 		Short: "Take away people's access to an app",
 		Example: `  $ nimbus unshare lena@acme.com
-  {"ok":true,"data":{"app":"renewal-desk","url":"https://renewal-desk.acme.nimbusapps.example","shared_with":["you@acme.com"]}}`,
+  {"ok":true,"data":{"app":"renewal-desk","url":"https://renewal-desk.acme.nimbus-apps.dev","shared_with":["you@acme.com"]}}`,
 		Args: minArgs(1),
 		RunE: a.run(func(ctx context.Context, args []string) (any, error) { return a.updateShares(ctx, args, false) }),
 	}

@@ -2,7 +2,7 @@
 
 `nimbus` is how agents use Nimbus. This file is both the CLI's spec and its feature tracker.
 
-Last updated 2026-10-26. Status: v0.0.1 released; no server yet. Domains ending in `.example` are placeholders until real ones are chosen.
+Last updated 2026-10-28. Status: v0.0.1 released; the server runs locally and is going onto a VM. The API is `https://api.nimbostrat.dev`, and apps are `https://<app>.<org>.nimbus-apps.dev`.
 
 **v0.1 scope:** hosting, Google sign-in, and sharing. Apps keep their data in a persistent `/data` directory (SQLite works well there) and have no outside data access yet. Connectors and `scopes` come in v0.2.
 
@@ -32,7 +32,7 @@ What a new user does in v0.1, from nothing to a coworker using the app. It cover
 Personal @gmail.com accounts aren't supported in v0.1.
 
 ## Tracker
-P0 is needed for the first end-to-end deploy. P1 must land before anyone outside the team uses it. Status values are todo, doing, and done. **"Done" means implemented and tested against `internal/fakeapi`.** Nothing has run against a real server yet, because there isn't one.
+P0 is needed for the first end-to-end deploy. P1 must land before anyone outside the team uses it. Status values are todo, doing, and done. **"Done" means implemented and tested against `internal/fakeapi`.** The P0 commands also ran end to end against `nimbus-server` on localhost on 2026-10-28.
 
 | # | Item | Pri | Status |
 |---|---|---|---|
@@ -53,7 +53,7 @@ P0 is needed for the first end-to-end deploy. P1 must land before anyone outside
 | 15 | Agent usability eval (see [Docs for agents](#docs-for-agents)); needs a release and a server | P0 | todo |
 | 21 | Fake control plane (`internal/fakeapi`, `cmd/nimbus-fakeapi`) for tests and trying the CLI by hand | P0 | done |
 | 19 | Claude Code skill and AGENTS.md snippet, generated from the guide | P0 | todo |
-| 22 | `examples/react-sqlite`: React (Vite) served by a small Node server, `GET /api/me`, SQLite in `$NIMBUS_DATA_DIR` | P0 | todo |
+| 22 | Examples with SQLite in `$NIMBUS_DATA_DIR`: `examples/react-tasks` (task board: React + a small Node server with `GET /api/me`) and `examples/python-dashboard` (stats dashboard: Flask + gunicorn) | P0 | done |
 | 23 | Manifest: reject `scopes` until connectors exist (the parser accepts it today) | P0 | todo |
 | 16 | `nimbus destroy`, `nimbus rollback`, `nimbus logout`, `nimbus upgrade` | P1 | todo |
 | 17 | `nimbus share --org` (anyone in the org who has the link) | P1 | todo |
@@ -94,10 +94,7 @@ nimbus list                apps you own
 nimbus docs                the agent guide, printed as markdown
 ```
 - **Global flags:** `--json`, `--app <name>` (defaults to `name` in `./nimbus.yaml`), `--help`, `--version`.
-- **Environment variables:** `NIMBUS_TOKEN` overrides the stored login. `NIMBUS_API_URL` sets the API URL. Until the hosted backend exists, the built-in default is the placeholder `https://api.nimbus.example`.
-  - `.example` is reserved (RFC 2606), so the placeholder can never resolve or receive a token.
-  - The CLI recognizes it and fails with `api_url_placeholder` instead of a confusing network error.
-  - Once a real domain exists, change `DefaultAPIURL` in `internal/cli/app.go`, or set it with `-ldflags`.
+- **Environment variables:** `NIMBUS_TOKEN` overrides the stored login. `NIMBUS_API_URL` sets the API URL. The built-in default is `https://api.nimbostrat.dev` (`DefaultAPIURL` in `internal/cli/app.go`, or set it with `-ldflags`).
 
   Credentials are only ever sent to the API that issued them.
 
@@ -106,7 +103,7 @@ nimbus docs                the agent guide, printed as markdown
 - **In a terminal:** it prints a URL and a code, opens the browser, and waits.
 - **Not in a terminal (agents):** it returns at once:
   ```json
-  {"ok":true,"data":{"status":"pending","verification_url":"https://nimbus.example/device?code=WDJB-MJHT","user_code":"WDJB-MJHT","expires_in":600}}
+  {"ok":true,"data":{"status":"pending","verification_url":"https://auth.nimbostrat.dev/device?code=WDJB-MJHT","user_code":"WDJB-MJHT","expires_in":600}}
   ```
   The agent shows the user the URL and then runs `nimbus login` again. That second call returns `{"status":"logged_in","email":"…","org":"…"}` once the user approves, or the same pending code if they haven't yet. If the user is already logged in, it returns `logged_in` straight away.
 - **Why it doesn't block for agents:** an agent can't show the user a URL while its own command is still running.
@@ -120,7 +117,7 @@ nimbus docs                the agent guide, printed as markdown
 - **Unchanged source:** if the source matches the live version, it creates no new version and returns `"unchanged": true`.
 - **Who can see it:** after the first deploy, only the deployer can open the app, and the output says so:
   ```json
-  {"ok":true,"data":{"app":"renewal-desk","url":"https://renewal-desk.acme.nimbusapps.example","version":3,"state":"live","shared_with":["you@acme.com"],"manifest_created":false}}
+  {"ok":true,"data":{"app":"renewal-desk","url":"https://renewal-desk.acme.nimbus-apps.dev","version":3,"state":"live","shared_with":["you@acme.com"],"manifest_created":false}}
   ```
 - **Failures** include the end of the log, so the agent doesn't need a second call:
   ```json
@@ -162,7 +159,6 @@ nimbus docs                the agent guide, printed as markdown
 | `not_logged_in` | Credentials are missing, expired, or rejected | Run `nimbus login` and show the user the URL |
 | `login_expired`, `login_denied` | The device code timed out, or the user denied it | Run `nimbus login` again |
 | `org_not_enabled` | The user's org isn't onboarded | Tell the user Nimbus is invite-only for now |
-| `api_url_placeholder` | The API URL is the `.example` placeholder because the hosted backend isn't live | Tell the user; to try it, run the fake API |
 | `api_url_not_set`, `invalid_api_url` | No usable `NIMBUS_API_URL` | Set it |
 | `cli_outdated` | The server requires a newer CLI | Re-run the install one-liner |
 | `invalid_manifest`, `invalid_name` | `nimbus.yaml` or the app name is invalid | Fix the field it names |
@@ -191,10 +187,12 @@ Without docs, this is what agents get wrong, so `nimbus docs` opens with it.
 1. Listen on `0.0.0.0:$PORT`.
 2. Don't build a login. The viewer's email is in the `X-Viewer-Email` request header. Trust it, because only Nimbus can reach the app. If the header is missing, the app is running locally. Browser code can't read request headers, so a React app's server exposes `GET /api/me`, which returns the header.
 3. Don't hold secrets: no API keys in the code, and `.env*` files aren't uploaded.
-4. Keep state in `$NIMBUS_DATA_DIR` (`/data` on Nimbus). It survives restarts, idle stops, and redeploys. Everything else on disk is wiped. SQLite works well there. Locally, default the directory to `./data`.
-5. Each app runs as a single instance. It sleeps after 15 minutes without requests, and the next request wakes it in a second or two.
-6. Use plain HTTP. There are no websockets, and requests time out after 5 minutes.
-7. The running app has no outbound internet. The build does, so `npm install` and `pip install` work, but the app can't call outside APIs. Requests the viewer's browser makes (CDNs, fonts) aren't affected.
+4. Keep state in `$NIMBUS_DATA_DIR` (`/data` on Nimbus), a directory on a local disk. It survives restarts, idle stops, and redeploys, and SQLite (including WAL mode) works well there. Locally, default the directory to `./data`.
+5. Only `$NIMBUS_DATA_DIR` and `/tmp` are writable: the app runs as uid 10001 on a read-only filesystem, with 512 MB of memory. `HOME` is `/tmp` unless the image sets it. `/tmp` is in memory and cleared on restart.
+6. Nimbus checks readiness only by connecting to `$PORT`. It never sends HTTP requests of its own, so every request comes from a signed-in viewer.
+7. Each app runs as a single instance. It sleeps after 15 minutes without requests (SIGTERM, then 10 seconds to exit), and the next request wakes it in a second or two. When a viewer's sign-in has expired, page loads are sent to sign in, but `fetch` calls get `401 {"error":"not_signed_in"}`, so the app can reload the page.
+8. Use plain HTTP. There are no websockets, and requests time out after 5 minutes.
+9. The running app has no outbound internet. The build does, so `npm install` and `pip install` work, but the app can't call outside APIs. Requests the viewer's browser makes (CDNs, fonts) aren't affected.
 
 ## Docs for agents
 Everything comes from one source and is published in several places:
@@ -286,7 +284,7 @@ Layout:
 | 2026-10-26 | No org-creation command: the org is the Google Workspace domain | The first login from an allowed domain creates it, so a new user has nothing extra to run. |
 | 2026-10-26 | v0.1 deploys need a Dockerfile; there are no buildpacks | One build path that's smaller and faster, and agents write Dockerfiles easily. Buildpacks can come later. |
 | 2026-10-26 | The Claude Code skill and a React + SQLite example are P0 | The agent has to know the app contract before it writes code, not after its first deploy fails. |
+| 2026-10-28 | The default API is `https://api.nimbostrat.dev`, and `api_url_placeholder` is gone | Real domains exist: `nimbostrat.dev` for `api` and `auth`, `nimbus-apps.dev` for apps. v0.0.1 keeps the placeholder until the next release. |
 
 ## Open questions
-- Real domains for the API and for apps. Until then, docs use `.example`, and the CLI's default is the `.example` placeholder.
 - "Nimbus" is a crowded name: Mozilla's experimentation platform, Status's Ethereum client, and Nimbus Note all use it. It's fine as a working name, but check trademarks and domain availability before launch.

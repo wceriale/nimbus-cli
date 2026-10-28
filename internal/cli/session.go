@@ -34,15 +34,8 @@ func (a *App) apiURL(remembered ...string) (string, error) {
 			"Set NIMBUS_API_URL to your Nimbus API, e.g. `export NIMBUS_API_URL=https://api.<your-domain>`.",
 			"No Nimbus API URL is configured.")
 	}
-	u, err := api.CheckURL(raw)
-	if err != nil {
+	if _, err := api.CheckURL(raw); err != nil {
 		return "", output.Errorf("invalid_api_url", "Fix NIMBUS_API_URL.", "NIMBUS_API_URL is invalid: %v.", err)
-	}
-	if strings.HasSuffix(u.Hostname(), ".example") {
-		return "", output.Errorf("api_url_placeholder",
-			"Tell the user the hosted Nimbus backend isn't live yet; retrying won't help. To try the CLI against a local fake API, "+
-				"run `go run github.com/wceriale/nimbus-cli/cmd/nimbus-fakeapi@latest`, then `export NIMBUS_API_URL=http://127.0.0.1:8787`.",
-			"nimbus is pointing at a placeholder API (%s): the hosted Nimbus backend isn't live yet.", raw)
 	}
 	return strings.TrimRight(raw, "/"), nil
 }

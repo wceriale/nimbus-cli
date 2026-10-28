@@ -1,0 +1,299 @@
+/* Team tasks. Cards on a planning board: a dot-grid surface, white index cards, one marker
+   color per column. Colors are tokens here so light and dark mode only swap values. */
+
+:root {
+  color-scheme: light dark;
+  --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  --font-display: ui-rounded, "SF Pro Rounded", var(--font-ui);
+
+  --bg: #eceff3;
+  --dot: #d2d8e0;
+  --surface: #f8f9fb;
+  --column: #e0e5eb;
+  --card: #ffffff;
+  --card-edge: #cbd3dd;
+  --ink: #1b2430;
+  --muted: #5c6878;
+  --line: #d5dbe3;
+  --hover: rgb(27 36 48 / 0.07);
+  --accent: #2f5bd3;
+  --todo: #7a8799;
+  --doing: #d98a1c;
+  --done: #2f9a5d;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #12171d;
+    --dot: #212a35;
+    --surface: #171d24;
+    --column: #1c232c;
+    --card: #27303b;
+    --card-edge: #0c1015;
+    --ink: #e5eaf0;
+    --muted: #97a3b3;
+    --line: #29323d;
+    --hover: rgb(229 234 240 / 0.08);
+    --accent: #87a5ff;
+    --todo: #8d99ab;
+    --doing: #f0a43a;
+    --done: #4cc07f;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 14px/1.45 var(--font-ui);
+  -webkit-font-smoothing: antialiased;
+}
+
+#root { height: 100dvh; display: flex; flex-direction: column; }
+
+button, input, textarea, select { font: inherit; color: inherit; }
+
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ---- Header ---- */
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 24px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  font: 700 21px/1 var(--font-display);
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+.brand svg { color: var(--accent); flex: none; }
+
+.me {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  color: var(--muted);
+}
+.me .avatar { width: 26px; height: 26px; font-size: 11px; }
+.me-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.me strong { color: var(--ink); font-weight: 600; }
+
+/* ---- Board and columns ---- */
+
+.board {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 24px;
+  overflow-x: auto;
+  background-image: radial-gradient(var(--dot) 1.2px, transparent 1.2px);
+  background-size: 20px 20px;
+}
+
+.board-status { margin: 0; color: var(--muted); }
+.board-status p { margin: 0 0 12px; color: var(--ink); }
+
+.column {
+  flex: 0 0 min(300px, 85vw);
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--column);
+  border-radius: 12px;
+}
+.column[data-column="todo"] { --marker: var(--todo); }
+.column[data-column="doing"] { --marker: var(--doing); }
+.column[data-column="done"] { --marker: var(--done); }
+.column.is-target { background: color-mix(in oklab, var(--column), var(--accent) 10%); }
+
+.column-head { display: flex; align-items: center; gap: 8px; padding: 14px 14px 10px; }
+.column-head h2 { margin: 0; font: 600 16px/1.2 var(--font-display); }
+.marker { width: 10px; height: 10px; border-radius: 50%; background: var(--marker); }
+.count {
+  margin-left: auto;
+  min-width: 24px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--hover);
+  color: var(--muted);
+  font: 600 12px/1.5 var(--font-display);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.column-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 2px 8px 8px;
+}
+.column-empty {
+  margin: 0;
+  padding: 18px 12px;
+  border: 1.5px dashed var(--card-edge);
+  border-radius: 8px;
+  color: var(--muted);
+  text-align: center;
+}
+
+/* ---- Cards ---- */
+
+.card {
+  position: relative;
+  padding: 10px 12px 8px;
+  background: var(--card);
+  border: 1px solid var(--card-edge);
+  border-bottom-width: 2px;
+  border-radius: 8px;
+  cursor: grab;
+}
+.card[inert] { opacity: 0.6; }
+.card.is-dragging { opacity: 0.4; }
+
+/* The blue line that shows where a dragged card will land, drawn in the gap between cards. */
+.card.drop-before::before,
+.card.drop-after::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 3px;
+  border-radius: 3px;
+  background: var(--accent);
+}
+.card.drop-before::before { top: -6.5px; }
+.card.drop-after::after { bottom: -7.5px; }
+
+.card-title { margin: 0 0 8px; overflow-wrap: anywhere; white-space: pre-wrap; cursor: text; }
+.column[data-column="done"] .card-title { color: var(--muted); }
+
+.card-editor {
+  display: block;
+  width: 100%;
+  margin: 0 0 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--surface);
+  resize: none;
+  field-sizing: content;
+  min-height: 4.5em;
+}
+
+.card-meta { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
+.card-author { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card-meta time { margin-left: auto; white-space: nowrap; }
+
+.avatar {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: oklch(56% 0.13 var(--hue));
+  color: #fff;
+  font: 700 9px/1 var(--font-display);
+}
+
+/* Move and delete: always shown on touch screens; elsewhere on hover or keyboard focus. */
+.card-actions { display: flex; gap: 2px; margin-block: -3px; } /* so showing them doesn't resize the card */
+@media (hover: hover) {
+  .card:not(:hover, :focus-within) .card-actions { display: none; }
+}
+
+.icon-button {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.icon-button:hover { background: var(--hover); color: var(--ink); }
+.icon-button:has(select:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* The select is invisible and covers the icon, so tapping the icon opens the native picker. */
+.icon-button select { position: absolute; inset: 0; width: 100%; opacity: 0; cursor: pointer; }
+
+/* ---- Add a card ---- */
+
+.add-card { display: flex; gap: 6px; padding: 0 8px 10px; }
+.add-card input {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+}
+.add-card input::placeholder { color: var(--muted); }
+.add-card input:hover { background: var(--hover); }
+.add-card input:focus { background: var(--card); border-color: var(--card-edge); outline: none; }
+.add-card button,
+.board-status button {
+  padding: 6px 12px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--surface);
+  font-weight: 600;
+  cursor: pointer;
+}
+.add-card button:disabled { display: none; }
+
+/* ---- Toast ---- */
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 16px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  width: max-content;
+  max-width: calc(100% - 32px);
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: var(--ink);
+  color: var(--bg);
+}
+.toast button { padding: 0; border: 0; background: none; color: inherit; font-weight: 600; text-decoration: underline; cursor: pointer; }
+
+/* ---- Phones ---- */
+
+@media (max-width: 640px) {
+  .topbar { padding: 10px 16px; }
+  .brand { font-size: 18px; }
+  .me-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  .board { gap: 12px; padding: 16px; scroll-snap-type: x mandatory; scroll-padding-inline: 16px; }
+  .column { scroll-snap-align: start; }
+}
+
+/* iOS zooms into inputs with text smaller than 16px. */
+@media (hover: none) {
+  .add-card input, .card-editor { font-size: 16px; }
+}

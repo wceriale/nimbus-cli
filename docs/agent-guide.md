@@ -44,11 +44,16 @@ After the first deploy, only the user who deployed it can open the app.
 1. **Listen on `0.0.0.0:$PORT`.** Read the port from the `PORT` environment variable. If the app has to use a fixed port, set `port:` in `nimbus.yaml` to the same number.
 2. **Don't build a login.** Nimbus signs the viewer in before any request reaches the app, and puts the viewer's email in the `X-Viewer-Email` request header. Trust that header: only Nimbus can reach the app. If the header is missing, the app is running locally, so fall back to a placeholder.
 3. **React and other single-page apps need a small server.** Browser code can't read request headers. Serve the built frontend from a server that also exposes `GET /api/me`, which returns the `X-Viewer-Email` header. The same server owns the data.
-4. **Keep state in `$NIMBUS_DATA_DIR`.** On Nimbus it's `/data`, and it survives restarts, idle stops, and redeploys. Everything else on disk is wiped. SQLite works well there. Locally, default the directory to `./data`.
-5. **Don't put secrets in the app.** That means no API keys in code, and `.env` files aren't uploaded anyway.
-6. **No outbound internet.** The build can download packages, but the running app can't call outside APIs or databases. Requests made by the viewer's browser, such as CDNs and fonts, aren't affected.
-7. **One instance, which sleeps when idle.** After 15 minutes without requests the app stops. The next request starts it again, which takes a second or two.
-8. **Use plain HTTP.** Websockets aren't supported, and requests time out after 5 minutes.
+4. **Keep state in `$NIMBUS_DATA_DIR`.** On Nimbus it's `/data`, a directory on a local disk, so SQLite (including WAL mode) works well there. It survives restarts, idle stops, and redeploys. Locally, default the directory to `./data`.
+5. **Only `$NIMBUS_DATA_DIR` and `/tmp` are writable.** The app runs as an unprivileged user (uid 10001) with a read-only filesystem, so writing anywhere else fails. `HOME` is `/tmp` unless the image sets it. `/tmp` is in memory and cleared on every restart. The app gets 512 MB of memory.
+6. **Nimbus only checks that the app accepts connections on `$PORT`.** It never sends HTTP requests of its own, so every request the app sees comes from a signed-in viewer.
+7. **Don't put secrets in the app.** That means no API keys in code, and `.env` files aren't uploaded anyway.
+8. **No outbound internet.** The build can download packages, but the running app can't call outside APIs or databases. Requests made by the viewer's browser, such as CDNs and fonts, aren't affected.
+9. **One instance, which sleeps when idle.** After 15 minutes without requests the app stops: it gets SIGTERM, then 10 seconds to exit. The next request starts it again, which takes a second or two.
+10. **Expired sign-ins reach `fetch` as a 401.** When a viewer's sign-in has expired, page loads are sent to sign in again, but `fetch` calls get `401` with `{"error":"not_signed_in"}`. Reload the page when you see it.
+11. **Use plain HTTP.** Websockets aren't supported, and requests time out after 5 minutes.
+
+Two complete examples, both with SQLite, are in the CLI's repo at https://github.com/wceriale/nimbus-cli/tree/main/examples: `react-tasks` (a task board: React with a small Node server) and `python-dashboard` (a stats dashboard: Flask and gunicorn). Copy one as a starting point. For Node with SQLite on a `node:*-slim` image, install with `npm ci --ignore-scripts`: `better-sqlite3` ships prebuilt binaries, but without that flag its install step looks for Python and fails the build with `gyp ERR! find Python`.
 
 A minimal Flask app with SQLite:
 ```python
@@ -76,11 +81,11 @@ if __name__ == "__main__":
 
 Saved as `app.py`, it needs this `Dockerfile` next to it:
 ```dockerfile
-FROM python:3.12-slim
+FROM python:3.13-slim
 WORKDIR /app
-RUN pip install --no-cache-dir flask
+RUN pip install --no-cache-dir flask gunicorn
 COPY . .
-CMD ["python", "app.py"]
+CMD exec gunicorn --bind 0.0.0.0:${PORT:-8080} --threads 8 app:app
 ```
 
 ## nimbus.yaml
@@ -96,7 +101,6 @@ The file has no other fields. A `share:` field is an error, because sharing is a
 | `not_logged_in` | Run `nimbus login` and show the user the URL. |
 | `login_expired`, `login_denied` | Run `nimbus login` again. If it was denied, ask the user what happened. |
 | `org_not_enabled` | Tell the user Nimbus is invite-only for now. Their org has to be onboarded. |
-| `api_url_placeholder` | The hosted backend isn't live yet. Tell the user; retrying won't help. The hint explains how to try a local fake API. |
 | `api_url_not_set`, `invalid_api_url` | Set `NIMBUS_API_URL` to the URL the user gives you. |
 | `cli_outdated` | Re-run the install one-liner, then retry. |
 | `invalid_manifest`, `invalid_name` | Fix the field the message names. |

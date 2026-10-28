@@ -2,7 +2,7 @@
 
 `nimbus` takes a web app your agent already wrote and runs it at a private URL behind your company's sign-in. You share it with coworkers by email, and the app always knows who's viewing it, so it never needs its own login.
 
-> **Status: early (v0.0.x).** The CLI installs and runs, but the hosted Nimbus backend isn't live yet, so commands that need it return `api_url_placeholder`. To try the whole flow now, point it at the fake API (see [Try it](#try-it)). Progress and spec: [DESIGN.md](DESIGN.md).
+> **Status: early (v0.0.x).** The CLI installs and runs, but the hosted Nimbus backend (`api.nimbostrat.dev`) isn't live yet. To try the whole flow now, point it at the fake API (see [Try it](#try-it)). Progress and spec: [DESIGN.md](DESIGN.md).
 
 ## For agents
 Install:

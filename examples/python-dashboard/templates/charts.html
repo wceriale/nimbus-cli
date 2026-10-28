@@ -1,0 +1,51 @@
+{# Server-rendered SVG charts: no JavaScript, no chart library.
+   Geometry comes from column_chart() and bar_rows() in app.py. Hovering a mark
+   shows its <title> as a tooltip; every value is also on the page as text. #}
+
+{% macro columns(c, label) %}
+<div class="colchart">
+  <svg class="yaxis" width="48" height="{{ c.height }}" aria-hidden="true">
+    {% for t in c.ticks %}<text x="42" y="{{ t.y + 4 }}" text-anchor="end">{{ t.label }}</text>{% endfor %}
+  </svg>
+  <svg class="plot" width="100%" height="{{ c.height }}" role="img" aria-label="{{ label }}">
+    {% for t in c.ticks %}
+    <line class="{{ 'baseline' if loop.first else 'gridline' }}" x1="0" x2="100%" y1="{{ t.y }}" y2="{{ t.y }}"/>
+    {% endfor %}
+    {% for b in c.bars %}
+    <g class="col{{ ' partial' if b.partial }}">
+      <title>{{ b.title }}</title>
+      <rect class="hit" x="{{ b.slot_x }}%" width="{{ c.slot_w }}%" height="{{ c.height }}"/>
+      {# x in % keeps the chart fluid; the nested <svg> moves the origin to the
+         column's center so the bar and its label keep their pixel sizes. #}
+      <svg x="{{ b.cx }}%" overflow="visible">
+        {% if b.path %}<path class="bar" d="{{ b.path }}"/>{% endif %}
+        {% if b.peak %}<text class="value" x="{{ b.dx }}" y="{{ b.top - 6 }}" text-anchor="{{ b.anchor }}">{{ b.value }}</text>{% endif %}
+      </svg>
+      <text{{ ' class="alt"'|safe if b.alt }} x="{{ b.cx }}%" y="{{ c.height - 6 }}" text-anchor="middle">{{ b.label }}</text>
+    </g>
+    {% endfor %}
+  </svg>
+</div>
+{% endmacro %}
+
+{% macro bars(rows, empty) %}
+{% if rows %}
+<ul class="bars">
+  {% for r in rows %}
+  <li title="{{ r.label }}: {{ r.amount|money }}, {{ r.deals }}">
+    <div class="bar-text">
+      <span class="bar-label">{{ r.label }} <span class="quiet">{{ r.deals }}</span></span>
+      <span class="num">{{ r.amount|money }}</span>
+    </div>
+    {# The inner <svg> is the bar's length and clips it: the rounded rect gives the
+       data end, the 8px square rect squares off the baseline end. #}
+    <svg width="100%" height="10" aria-hidden="true">
+      <svg width="{{ r.pct }}%"><rect width="100%" height="10" rx="4"/><rect width="8" height="10"/></svg>
+    </svg>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="quiet">{{ empty }}</p>
+{% endif %}
+{% endmacro %}

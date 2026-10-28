@@ -29,11 +29,11 @@ URL, and after they approve, run nimbus login again: it returns
 "logged_in".`,
 		Example: `  # Agent, step 1: get a URL for the user
   $ nimbus login
-  {"ok":true,"data":{"status":"pending","api_url":"https://api.nimbus.example","verification_url":"https://nimbus.example/device?code=WDJB-MJHT","user_code":"WDJB-MJHT","expires_in":600,"browser_opened":false,"next":"Show the user verification_url ..."}}
+  {"ok":true,"data":{"status":"pending","api_url":"https://api.nimbostrat.dev","verification_url":"https://auth.nimbostrat.dev/device?code=WDJB-MJHT","user_code":"WDJB-MJHT","expires_in":600,"browser_opened":false,"next":"Show the user verification_url ..."}}
 
   # Agent, step 2: after the user approves
   $ nimbus login
-  {"ok":true,"data":{"status":"logged_in","email":"you@acme.com","org":"acme","api_url":"https://api.nimbus.example","auth":"login"}}`,
+  {"ok":true,"data":{"status":"logged_in","email":"you@acme.com","org":"acme","api_url":"https://api.nimbostrat.dev","auth":"login"}}`,
 		Args: noArgs,
 		RunE: a.run(func(ctx context.Context, _ []string) (any, error) {
 			return a.login(ctx, wait || a.StdoutIsTTY)

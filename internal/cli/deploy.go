@@ -41,7 +41,7 @@ otherwise the runtime (Python, Node, Go) is detected.
 Deploying the same source again returns "unchanged": true and builds nothing.
 After the first deploy, only you can open the app: share it with nimbus share.`,
 		Example: `  $ nimbus deploy
-  {"ok":true,"data":{"app":"renewal-desk","url":"https://renewal-desk.acme.nimbusapps.example","version":1,"state":"live","unchanged":false,"manifest_created":true,"shared_with":["you@acme.com"],"next":"Only you can open it. ..."}}
+  {"ok":true,"data":{"app":"renewal-desk","url":"https://renewal-desk.acme.nimbus-apps.dev","version":1,"state":"live","unchanged":false,"manifest_created":true,"shared_with":["you@acme.com"],"next":"Only you can open it. ..."}}
 
   # On failure, error.log_tail has the end of the log:
   {"ok":false,"error":{"code":"start_failed","message":"Container didn't listen on port 8080 within 60s","hint":"Listen on 0.0.0.0:$PORT. ...","log_tail":["..."]}}`,

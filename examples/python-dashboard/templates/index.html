@@ -1,0 +1,230 @@
+{% import "charts.html" as charts -%}
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Sales dashboard</title>
+<link rel="icon" href="data:,">
+<style>
+  /* Color tokens: light by default, dark when the OS asks for it. */
+  :root {
+    --page: #f9f9f7; --surface: #fcfcfb; --border: rgba(11, 11, 11, .10);
+    --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+    --grid: #e1e0d9; --axis: #c3c2b7; --chip: rgba(11, 11, 11, .05);
+    --series: #2a78d6; --series-soft: #86b6ef;  /* bars; soft = month still in progress */
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --page: #0d0d0d; --surface: #1a1a19; --border: rgba(255, 255, 255, .10);
+      --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+      --grid: #2c2c2a; --axis: #383835; --chip: rgba(255, 255, 255, .07);
+      --series: #3987e5; --series-soft: #1c5cab;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--page); color: var(--ink);
+         font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .wrap { max-width: 1160px; margin: 0 auto; padding: 28px 16px 48px; }
+  h1 { font-size: 20px; font-weight: 600; letter-spacing: -.01em; margin: 0; }
+  h2 { font-size: 14px; font-weight: 600; margin: 0; }
+  .quiet { color: var(--ink-2); }
+  .num { font-variant-numeric: tabular-nums; }
+
+  header { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: end;
+           gap: 8px 24px; margin-bottom: 20px; }
+  header p { margin: 2px 0 0; }
+  .whoami strong { font-weight: 600; }
+
+  .filters { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 16px; }
+  .filters a { padding: 4px 11px; border-radius: 999px; background: var(--chip);
+               color: var(--ink-2); text-decoration: none; white-space: nowrap; }
+  .filters a:hover { color: var(--ink); }
+  .filters a[aria-current] { background: var(--ink); color: var(--page); }
+  .filters .label { color: var(--ink-2); margin-right: 4px; }
+
+  .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 16px; }
+  .grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 16px;
+          align-items: start; margin-bottom: 16px; }
+  .stack { display: grid; gap: 16px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+          padding: 16px; min-width: 0; }
+  .card > .quiet { margin: 2px 0 14px; font-size: 13px; }
+
+  .kpi .label { color: var(--ink-2); font-size: 13px; }
+  .kpi .value { font-size: 28px; font-weight: 600; letter-spacing: -.02em; margin: 2px 0; }
+  .kpi .quiet { font-size: 13px; }
+
+  /* Column chart */
+  .colchart { display: grid; grid-template-columns: 48px minmax(0, 1fr); }  /* y axis | plot */
+  .colchart svg { display: block; overflow: visible; }
+  .colchart text { font-size: 11px; fill: var(--muted); font-variant-numeric: tabular-nums; }
+  .colchart text.value { fill: var(--ink-2); font-weight: 600; }
+  .gridline { stroke: var(--grid); }
+  .baseline { stroke: var(--axis); }
+  .bar { fill: var(--series); }
+  .partial .bar { fill: var(--series-soft); }
+  .hit { fill: transparent; }
+  .col:hover .bar { opacity: .8; }
+
+  /* Horizontal bars */
+  .bars { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+  .bar-text { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 4px; }
+  .bar-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bar-label .quiet { font-size: 12px; margin-left: 4px; }
+  .bars svg { display: block; }
+  .bars rect { fill: var(--series); }
+  .bars li:hover rect { opacity: .8; }
+
+  /* Tables */
+  .scroll { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; font-weight: 500; color: var(--ink-2); border-bottom: 1px solid var(--axis); }
+  th, td { padding: 7px 14px 7px 0; white-space: nowrap; }
+  td { border-bottom: 1px solid var(--grid); }
+  th:last-child, td:last-child { padding-right: 0; }
+  .right { text-align: right; font-variant-numeric: tabular-nums; }
+  tr.lost td { color: var(--ink-2); }
+  details { margin-top: 12px; }
+  summary { cursor: pointer; color: var(--ink-2); font-size: 13px; }
+  details table { margin-top: 8px; }
+
+  .viewers { list-style: none; margin: 0; padding: 0; }
+  .viewers li { display: flex; justify-content: space-between; gap: 12px; padding: 7px 0;
+                border-bottom: 1px solid var(--grid); }
+  .viewers li:last-child { border-bottom: 0; }
+  .viewers .email { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .you { font-size: 11px; padding: 1px 6px; border-radius: 999px; background: var(--chip);
+         color: var(--ink-2); margin-left: 6px; }
+  footer { color: var(--muted); font-size: 12px; }
+  code { font-size: 12px; }
+
+  @media (max-width: 860px) {
+    .grid { grid-template-columns: minmax(0, 1fr); }
+    .kpis { grid-template-columns: repeat(2, 1fr); }
+  }
+  @media (max-width: 520px) {
+    .wrap { padding-top: 18px; }
+    .kpis { gap: 10px; }
+    .card { padding: 14px; }
+    .kpi .value { font-size: 22px; }
+    .colchart text.alt { display: none; }  /* every other month label */
+    .hide-sm { display: none; }
+    td, th { white-space: normal; }  /* let names wrap so the table fits */
+    .right { white-space: nowrap; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div>
+    <h1>Sales dashboard</h1>
+    <p class="quiet">Acme sales, last 12 months. Fake data.</p>
+  </div>
+  <div class="whoami quiet">
+    Signed in as <strong>{{ me }}</strong>
+    {% if is_local %}<br><small>No X-Viewer-Email header, so this is running locally.</small>{% endif %}
+  </div>
+</header>
+
+<nav class="filters" aria-label="Filter by owner">
+  <span class="label">Owner</span>
+  <a href="{{ url_for('dashboard') }}" {% if not owner %}aria-current="page"{% endif %}>All</a>
+  {% if me in owners %}
+  <a href="{{ url_for('dashboard', owner=me) }}" {% if owner == me %}aria-current="page"{% endif %}>My deals</a>
+  {% endif %}
+  {% for o in owners %}
+  <a href="{{ url_for('dashboard', owner=o) }}" {% if owner == o %}aria-current="page"{% endif %}>{{ o|person }}</a>
+  {% endfor %}
+</nav>
+
+<section class="kpis">
+  {% for label, value, note in kpis %}
+  <div class="card kpi">
+    <div class="label">{{ label }}</div>
+    <div class="value">{{ value }}</div>
+    <div class="quiet">{{ note }}</div>
+  </div>
+  {% endfor %}
+</section>
+
+<div class="grid">
+  <section class="card">
+    <h2>Closed-won revenue by month</h2>
+    <p class="quiet">{{ owner|person if owner else "All account executives" }}. This month so far is fainter.</p>
+    {{ charts.columns(chart, "Closed-won revenue for each of the last 12 months") }}
+    <details>
+      <summary>Show as a table</summary>
+      <table>
+        <tr><th>Month</th><th class="right">Closed won</th><th class="right">Deals</th></tr>
+        {% for month, amount, deals in monthly %}
+        <tr><td>{{ month.strftime("%B %Y") }}</td><td class="right">{{ amount|money }}</td><td class="right">{{ deals }}</td></tr>
+        {% endfor %}
+      </table>
+    </details>
+  </section>
+  <section class="card">
+    <h2>Pipeline by stage</h2>
+    <p class="quiet">Open deals, earliest stage first</p>
+    {{ charts.bars(pipeline, "No open deals.") }}
+  </section>
+</div>
+
+<div class="grid">
+  <section class="card">
+    <h2>Deals</h2>
+    <p class="quiet">
+      {{ owner|person if owner else "Everyone" }}: open deals first, then the latest closes.
+      {% if deal_count > deals|length %}Showing {{ deals|length }} of {{ deal_count }}.{% endif %}
+    </p>
+    <div class="scroll">
+      <table>
+        <tr>
+          <th>Account</th><th>Owner</th><th class="hide-sm">Region</th><th>Stage</th>
+          <th class="right">Amount</th><th class="right hide-sm">Created</th><th class="right hide-sm">Closed</th>
+        </tr>
+        {% for d in deals %}
+        <tr{{ ' class="lost"'|safe if d.stage == "Closed Lost" }}>
+          <td>{{ d.account }}</td>
+          <td>{{ d.owner|person }}</td>
+          <td class="hide-sm">{{ d.region }}</td>
+          <td>{{ d.stage }}</td>
+          <td class="right">${{ "{:,}".format(d.amount) }}</td>
+          <td class="right hide-sm">{{ d.created_on|day }}</td>
+          <td class="right hide-sm">{{ d.closed_on|day if d.closed_on else "" }}</td>
+        </tr>
+        {% endfor %}
+      </table>
+    </div>
+  </section>
+
+  <div class="stack">
+    <section class="card">
+      <h2>Top accounts</h2>
+      <p class="quiet">By closed-won revenue, last 12 months</p>
+      {{ charts.bars(top_accounts, "No closed-won deals yet.") }}
+    </section>
+    <section class="card">
+      <h2>Recent viewers</h2>
+      <p class="quiet">Saved to SQLite on every page view</p>
+      <ol class="viewers">
+        {% for v in viewers %}
+        <li>
+          <span class="email">{{ v.email }}{% if v.email == me %}<span class="you">you</span>{% endif %}</span>
+          <span class="quiet num">{{ v.views }} view{{ "s" if v.views != 1 }} · {{ v.last_seen|ago }}</span>
+        </li>
+        {% endfor %}
+      </ol>
+    </section>
+  </div>
+</div>
+
+<footer>A Nimbus example app. Data is generated on first start and kept in <code>$NIMBUS_DATA_DIR/dashboard.db</code>.</footer>
+
+</div>
+</body>
+</html>
