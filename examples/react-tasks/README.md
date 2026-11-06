@@ -3,7 +3,7 @@
 A small Trello-style board with three columns. You can drag cards between columns, rename them inline, and see who added each one. It's the reference React app for Nimbus, so copy it when a tool needs a frontend and saved data.
 
 ## How it uses Nimbus
-- **Who's viewing:** Nimbus signs people in and passes their email in the `X-Viewer-Email` header. The server stamps new cards with it and returns it from `GET /api/me`, because browser code can't read request headers. There's no login code. Locally the header is missing, so the server uses `local-dev@example.com`.
+- **Who's viewing:** Nimbus signs people in and passes their email in the `X-Viewer-Email` header. The server stamps new cards with it and returns it from `GET /api/me`, because browser code can't read request headers. There's no login code. Locally the header is missing, so the server uses `local-dev@example.com`. It's also missing on a public app, so keep this one private, or every card will say it was added by `local-dev@example.com`.
 - **Data:** SQLite at `$NIMBUS_DATA_DIR/tasks.db`. That's `/data` on Nimbus and `./data` locally. It's the only directory that survives restarts and redeploys.
 - **Runtime:** the server listens on `0.0.0.0:$PORT`, holds no secrets, and makes no outbound calls. Nimbus runs it as a non-root user on a read-only filesystem, so it writes only to the data directory.
 - **Logs:** the server prints one line per request to stdout, e.g. `POST /api/cards 201 4ms lena@acme.com`. That's what `nimbus logs` shows.

@@ -19,7 +19,7 @@ python3.13 -m venv .venv && . .venv/bin/activate
 pip install -r requirements.txt
 python app.py                 # http://localhost:8080, data in ./data
 ```
-Without the header, you're `local-dev@example.com`. To see the page as one of the AEs:
+Without the header, you're `local-dev@example.com`. That's also who every viewer is if you make the app public (`nimbus share --public`), because public apps get no header. To see the page as one of the AEs:
 ```sh
 curl -H 'X-Viewer-Email: maya.chen@acme.com' 'http://localhost:8080/?owner=maya.chen@acme.com'
 ```

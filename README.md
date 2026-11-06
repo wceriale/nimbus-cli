@@ -1,6 +1,6 @@
 # Nimbus CLI
 
-`nimbus` takes a web app your agent already wrote and runs it at a private URL behind your company's sign-in. You share it with coworkers by email, and the app always knows who's viewing it, so it never needs its own login.
+`nimbus` takes a web app your agent already wrote and runs it at a private URL behind your company's sign-in. You share it with coworkers by email, and the app always knows who's viewing it, so it never needs its own login. To let anyone on the internet open it instead, make it public.
 
 > **Status: early access (v0.0.x).** Nimbus is live at `api.nimbostrat.dev`. People sign in with their Google Workspace account, and their company's domain has to be enabled first. Progress and spec: [DESIGN.md](DESIGN.md).
 
@@ -16,10 +16,13 @@ The core loop:
 nimbus login                 # returns a URL: show it to your user, then run `nimbus login` again
 nimbus deploy                # builds and ships the current directory, prints the URL
 nimbus share lena@acme.com   # gives a coworker access
+nimbus share --public        # or lets anyone open it, without signing in
 ```
+Apps start private. `nimbus unshare --public` makes one private again. A public app gets no `X-Viewer-Email`, so it can't tell who's viewing.
+
 Output is JSON whenever stdout isn't a terminal. On failure, `error.code` says what went wrong and `error.hint` gives the next step.
 
-To pin a version, or install somewhere other than `~/.local/bin`, set `NIMBUS_VERSION=v0.0.1` or `NIMBUS_INSTALL_DIR=…` before `sh`. The installer verifies the download against the release's `checksums.txt` and doesn't need sudo.
+To pin a version, or install somewhere other than `~/.local/bin`, set `NIMBUS_VERSION=v0.0.3` or `NIMBUS_INSTALL_DIR=…` before `sh`. The installer verifies the download against the release's `checksums.txt` and doesn't need sudo.
 
 ## For humans
 The same commands work in a terminal, with readable output. Nimbus is invite-only during early access.
