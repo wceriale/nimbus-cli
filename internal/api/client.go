@@ -205,9 +205,13 @@ func (c *Client) Logs(ctx context.Context, name, since string, limit int) (*Logs
 	return &l, nil
 }
 
-// UpdateShares adds and removes viewers in one all-or-nothing call.
-func (c *Client) UpdateShares(ctx context.Context, name string, add, remove []string) (*Shares, error) {
-	in := map[string][]string{"add": nonNil(add), "remove": nonNil(remove)}
+// UpdateShares adds and removes viewers, and makes the app public or private
+// unless public is nil, in one all-or-nothing call.
+func (c *Client) UpdateShares(ctx context.Context, name string, add, remove []string, public *bool) (*Shares, error) {
+	in := map[string]any{"add": nonNil(add), "remove": nonNil(remove)}
+	if public != nil {
+		in["public"] = *public
+	}
 	var s Shares
 	if err := c.do(ctx, http.MethodPatch, appPath(name)+"/shares", in, &s); err != nil {
 		return nil, err

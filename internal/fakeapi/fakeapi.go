@@ -76,6 +76,7 @@ type session struct {
 type app struct {
 	name, owner      string
 	shares           map[string]bool
+	public           bool
 	versions         []*version
 	lastUpload       *upload
 	created, updated time.Time
@@ -543,6 +544,7 @@ func (f *Fake) updateShares(w http.ResponseWriter, r *http.Request, email string
 	var in struct {
 		Add    []string `json:"add"`
 		Remove []string `json:"remove"`
+		Public *bool    `json:"public"`
 	}
 	if !readJSON(w, r, &in) {
 		return
@@ -590,8 +592,11 @@ func (f *Fake) updateShares(w http.ResponseWriter, r *http.Request, email string
 	for _, e := range remove {
 		delete(a.shares, e)
 	}
+	if in.Public != nil {
+		a.public = *in.Public
+	}
 	a.updated = time.Now()
-	writeJSON(w, http.StatusOK, map[string]any{"app": a.name, "url": f.appURL(a), "shared_with": a.sharedWith()})
+	writeJSON(w, http.StatusOK, map[string]any{"app": a.name, "url": f.appURL(a), "shared_with": a.sharedWith(), "public": a.public})
 }
 
 // ownedApp finds an app the caller owns. Like the real server, it answers
@@ -692,6 +697,7 @@ func (f *Fake) appJSON(a *app) map[string]any {
 		"live_version":   live,
 		"latest_version": latest,
 		"shared_with":    a.sharedWith(),
+		"public":         a.public,
 		"created_at":     a.created,
 		"updated_at":     a.updated,
 	}

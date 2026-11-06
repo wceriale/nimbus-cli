@@ -112,7 +112,11 @@ func (r *statusResult) Text() string {
 			fmt.Fprintf(&b, "  %s\n", line)
 		}
 	}
-	fmt.Fprintf(&b, "Shared with: %s", strings.Join(r.SharedWith, ", "))
+	if r.Public {
+		b.WriteString("Public: anyone can open it without signing in")
+	} else {
+		fmt.Fprintf(&b, "Shared with: %s", strings.Join(r.SharedWith, ", "))
+	}
 	if r.Next != "" {
 		b.WriteString("\n" + r.Next)
 	}
@@ -150,7 +154,7 @@ func (a *App) status(ctx context.Context, args []string) (any, error) {
 	case "failed":
 		res.Next = "Read latest.log_tail, fix the problem, then run `nimbus deploy` again."
 	case "live":
-		if len(app.SharedWith) <= 1 {
+		if !app.Public && len(app.SharedWith) <= 1 {
 			res.Next = "Only you can open it. Run `nimbus share <email>` to give coworkers access."
 		}
 	}
@@ -200,29 +204,61 @@ func (r *listResult) Text() string {
 }
 
 func (a *App) shareCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "share <email>...",
-		Short: "Give people in your org access to an app",
+	var public bool
+	cmd := &cobra.Command{
+		Use:   "share [email]...",
+		Short: "Give people in your org access to an app, or with --public open it to everyone",
 		Long: `Give people in your org access to an app. The app defaults to --app, then to
 name in ./nimbus.yaml. Prints everyone who has access afterwards.
 
 Only addresses in your own org work, and nobody is notified: send them the URL.
-Redeploying never changes who has access.`,
+Redeploying never changes who has access.
+
+With --public, anyone on the internet can open the app without signing in, and
+the app gets no X-Viewer-Email header. The share list is kept for when you make
+it private again with nimbus unshare --public.`,
 		Example: `  $ nimbus share lena@acme.com
-  {"ok":true,"data":{"app":"renewal-desk","url":"https://renewal-desk.acme.nimbus-apps.dev","shared_with":["you@acme.com","lena@acme.com"],"next":"Send them the URL. ..."}}`,
-		Args: minArgs(1),
-		RunE: a.run(func(ctx context.Context, args []string) (any, error) { return a.updateShares(ctx, args, true) }),
+  {"ok":true,"data":{"app":"renewal-desk","url":"https://renewal-desk.acme.nimbus-apps.dev","shared_with":["you@acme.com","lena@acme.com"],"public":false,"next":"Send them the URL. ..."}}
+
+  $ nimbus share --public
+  {"ok":true,"data":{"app":"renewal-desk","url":"https://renewal-desk.acme.nimbus-apps.dev","shared_with":["you@acme.com","lena@acme.com"],"public":true,"next":"Anyone with the URL can open it. ..."}}`,
+		Args: emailsOrPublic(&public),
+		RunE: a.run(func(ctx context.Context, args []string) (any, error) { return a.updateShares(ctx, args, true, public) }),
 	}
+	cmd.Flags().BoolVar(&public, "public", false, "let anyone on the internet open the app, without signing in")
+	return cmd
 }
 
 func (a *App) unshareCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "unshare <email>...",
-		Short: "Take away people's access to an app",
+	var public bool
+	cmd := &cobra.Command{
+		Use:   "unshare [email]...",
+		Short: "Take away people's access to an app, or with --public make it private again",
+		Long: `Take away people's access to an app. The app defaults to --app, then to name
+in ./nimbus.yaml. Prints everyone who has access afterwards.
+
+With --public, a public app becomes private again: viewers have to sign in, and
+only the people it's shared with get in.`,
 		Example: `  $ nimbus unshare lena@acme.com
-  {"ok":true,"data":{"app":"renewal-desk","url":"https://renewal-desk.acme.nimbus-apps.dev","shared_with":["you@acme.com"]}}`,
-		Args: minArgs(1),
-		RunE: a.run(func(ctx context.Context, args []string) (any, error) { return a.updateShares(ctx, args, false) }),
+  {"ok":true,"data":{"app":"renewal-desk","url":"https://renewal-desk.acme.nimbus-apps.dev","shared_with":["you@acme.com"],"public":false}}
+
+  $ nimbus unshare --public
+  {"ok":true,"data":{"app":"renewal-desk","url":"https://renewal-desk.acme.nimbus-apps.dev","shared_with":["you@acme.com"],"public":false}}`,
+		Args: emailsOrPublic(&public),
+		RunE: a.run(func(ctx context.Context, args []string) (any, error) { return a.updateShares(ctx, args, false, public) }),
+	}
+	cmd.Flags().BoolVar(&public, "public", false, "make a public app private again, so viewers have to sign in")
+	return cmd
+}
+
+// emailsOrPublic requires at least one email, unless --public is set.
+func emailsOrPublic(public *bool) cobra.PositionalArgs {
+	return func(cmd *cobra.Command, args []string) error {
+		if len(args) > 0 || *public {
+			return nil
+		}
+		return output.Usage(fmt.Sprintf("`%s` needs at least one email address, or --public.", cmd.CommandPath()),
+			fmt.Sprintf("Usage: `%s`. Run `%s --help` for details.", cmd.UseLine(), cmd.CommandPath()))
 	}
 }
 
@@ -230,18 +266,25 @@ type shareResult struct {
 	App        string   `json:"app"`
 	URL        string   `json:"url"`
 	SharedWith []string `json:"shared_with"`
+	Public     bool     `json:"public"`
 	Next       string   `json:"next,omitempty"`
 }
 
 func (r *shareResult) Text() string {
-	s := fmt.Sprintf("%s (%s) is shared with: %s", r.App, r.URL, strings.Join(r.SharedWith, ", "))
+	access := "shared with: " + strings.Join(r.SharedWith, ", ")
+	if r.Public {
+		access = "public: anyone can open it without signing in"
+	}
+	s := fmt.Sprintf("%s (%s) is %s", r.App, r.URL, access)
 	if r.Next != "" {
 		s += "\n" + r.Next
 	}
 	return s
 }
 
-func (a *App) updateShares(ctx context.Context, emails []string, add bool) (any, error) {
+// updateShares adds or removes emails. With public, share makes the app
+// public and unshare makes it private again.
+func (a *App) updateShares(ctx context.Context, emails []string, add, public bool) (any, error) {
 	name, err := a.appName(nil)
 	if err != nil {
 		return nil, err
@@ -263,17 +306,24 @@ func (a *App) updateShares(ctx context.Context, emails []string, add bool) (any,
 	if err != nil {
 		return nil, err
 	}
+	var pub *bool
+	if public {
+		pub = &add
+	}
 	var s *api.Shares
 	if add {
-		s, err = sess.client.UpdateShares(ctx, name, emails, nil)
+		s, err = sess.client.UpdateShares(ctx, name, emails, nil, pub)
 	} else {
-		s, err = sess.client.UpdateShares(ctx, name, nil, emails)
+		s, err = sess.client.UpdateShares(ctx, name, nil, emails, pub)
 	}
 	if err != nil {
 		return nil, err
 	}
-	res := &shareResult{App: s.App, URL: s.URL, SharedWith: s.SharedWith}
-	if add {
+	res := &shareResult{App: s.App, URL: s.URL, SharedWith: s.SharedWith, Public: s.Public}
+	switch {
+	case s.Public:
+		res.Next = "Anyone with the URL can open it, without signing in, and the app gets no X-Viewer-Email. Run `nimbus unshare --public` to require sign-in again."
+	case add:
 		res.Next = "Send them the URL. Nimbus doesn't notify anyone; they open it and sign in with their company account."
 	}
 	return res, nil

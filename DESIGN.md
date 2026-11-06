@@ -2,7 +2,7 @@
 
 `nimbus` is how agents use Nimbus. This file is both the CLI's spec and its feature tracker.
 
-Last updated 2026-10-28. Status: live. The API is `https://api.nimbostrat.dev`, with Google sign-in, and apps run at `https://<app>.<org>.nimbus-apps.dev`. v0.0.1 is released, but it still defaults to the old placeholder API; the next release defaults to the live one.
+Last updated 2026-11-05. Status: live. The API is `https://api.nimbostrat.dev`, with Google sign-in, and apps run at `https://<app>.<org>.nimbus-apps.dev`. v0.0.1 is released, but it still defaults to the old placeholder API; the next release defaults to the live one.
 
 **v0.1 scope:** hosting, Google sign-in, and sharing. Apps keep their data in a persistent `/data` directory (SQLite works well there) and have no outside data access yet. Connectors and `scopes` come in v0.2.
 
@@ -58,6 +58,7 @@ P0 is needed for the first end-to-end deploy. P1 must land before anyone outside
 | 16 | `nimbus destroy`, `nimbus rollback`, `nimbus upgrade` | P1 | todo |
 | 24 | `nimbus logout`: revoke the login on the server (`POST /oauth/revoke`), then delete it locally | P1 | done |
 | 17 | `nimbus share --org` (anyone in the org who has the link) | P1 | todo |
+| 25 | `nimbus share --public` / `unshare --public` (anyone on the internet, no sign-in) | P1 | done |
 | 20 | CI check that the guide's examples still run | P1 | todo |
 | 18 | `scopes` in the manifest, plus consent errors | v0.2 | todo |
 
@@ -88,8 +89,8 @@ nimbus login               device-flow login; the only step that needs a human
 nimbus logout              revoke this machine's login and delete it
 nimbus whoami              email, org, API URL, CLI version; use as a preflight check
 nimbus deploy [dir]        build and ship a directory (default .), then print the URL
-nimbus share <email>...    give viewers access
-nimbus unshare <email>...  take access away
+nimbus share <email>...    give viewers access; --public opens it to anyone, no sign-in
+nimbus unshare <email>...  take access away; --public makes it private again
 nimbus status [app]        URL, version, state (building|live|failed), who has access
 nimbus logs [app]          runtime logs: --since 1h --limit 200; --build for the last build log
 nimbus list                apps you own
@@ -130,6 +131,7 @@ nimbus docs                the agent guide, printed as markdown
 - **Who:** v0.1 only accepts email addresses in your own org.
 - **Output:** the full access list, plus the URL to send people. v0.1 sends no notification.
 - **Where sharing lives:** only on the server. Redeploying never changes who has access, and the manifest has no `share:` field.
+- **Public:** `nimbus share --public` lets anyone on the internet open the app without signing in, and the app gets no `X-Viewer-Email`. `nimbus unshare --public` makes it private again, with its share list intact. Apps start private.
 
 ### P1
 - `nimbus destroy [app] --yes`
@@ -239,7 +241,7 @@ POST   /v1/apps/{app}/versions                  build and deploy an upload
 GET    /v1/apps/{app}/versions/{n|latest}       deploy polling, status
 GET    /v1/apps/{app}/versions/{n}/build-log    logs --build
 GET    /v1/apps/{app}/logs?since=&limit=        logs
-PATCH  /v1/apps/{app}/shares                    share, unshare: {"add":[…],"remove":[…]}, all or nothing
+PATCH  /v1/apps/{app}/shares                    share, unshare: {"add":[…],"remove":[…],"public":bool}, all or nothing
 
 P1
 POST   /oauth/revoke                            logout (RFC 7009)
@@ -286,6 +288,7 @@ Layout:
 | 2026-10-26 | v0.1 deploys need a Dockerfile; there are no buildpacks | One build path that's smaller and faster, and agents write Dockerfiles easily. Buildpacks can come later. |
 | 2026-10-26 | The Claude Code skill and a React + SQLite example are P0 | The agent has to know the app contract before it writes code, not after its first deploy fails. |
 | 2026-10-28 | The default API is `https://api.nimbostrat.dev`, and `api_url_placeholder` is gone | Real domains exist: `nimbostrat.dev` for `api` and `auth`, `nimbus-apps.dev` for apps. v0.0.1 keeps the placeholder until the next release. |
+| 2026-11-05 | Public apps are a flag on `share`/`unshare` (`--public`), not a new command | Matches the planned `--org`, keeps the command list short, and making an app public goes through the same all-or-nothing `PATCH`. |
 
 ## Open questions
 - "Nimbus" is a crowded name: Mozilla's experimentation platform, Status's Ethereum client, and Nimbus Note all use it. It's fine as a working name, but check trademarks and domain availability before launch.

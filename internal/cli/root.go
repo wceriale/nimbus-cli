@@ -53,10 +53,6 @@ func maxArgs(n int) cobra.PositionalArgs {
 	return func(cmd *cobra.Command, args []string) error { return argCount(cmd, args, 0, n) }
 }
 
-func minArgs(n int) cobra.PositionalArgs {
-	return func(cmd *cobra.Command, args []string) error { return argCount(cmd, args, n, -1) }
-}
-
 func argCount(cmd *cobra.Command, args []string, lo, hi int) error {
 	if len(args) >= lo && (hi < 0 || len(args) <= hi) {
 		return nil

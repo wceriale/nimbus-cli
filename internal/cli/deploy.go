@@ -60,6 +60,7 @@ type deployResult struct {
 	Unchanged       bool     `json:"unchanged"`
 	ManifestCreated bool     `json:"manifest_created"`
 	SharedWith      []string `json:"shared_with,omitempty"`
+	Public          bool     `json:"public,omitempty"`
 	EnvFilesSkipped []string `json:"env_files_skipped,omitempty"`
 	Next            string   `json:"next,omitempty"`
 }
@@ -155,8 +156,8 @@ func (a *App) deploy(ctx context.Context, args []string, noWait bool) (any, erro
 	if app, err = c.GetApp(ctx, name); err != nil {
 		return nil, err
 	}
-	res.URL, res.SharedWith, res.Version, res.State = app.URL, app.SharedWith, v.Number, v.State
-	if len(app.SharedWith) <= 1 {
+	res.URL, res.SharedWith, res.Public, res.Version, res.State = app.URL, app.SharedWith, app.Public, v.Number, v.State
+	if !app.Public && len(app.SharedWith) <= 1 {
 		res.Next = "Only you can open it. Run `nimbus share <email>` to give coworkers access."
 	}
 	return res, nil

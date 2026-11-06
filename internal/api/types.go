@@ -53,6 +53,7 @@ type App struct {
 	LiveVersion   *int      `json:"live_version"`
 	LatestVersion *int      `json:"latest_version"`
 	SharedWith    []string  `json:"shared_with"`
+	Public        bool      `json:"public"`
 	CreatedAt     time.Time `json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
 }
@@ -103,4 +104,5 @@ type Shares struct {
 	App        string   `json:"app"`
 	URL        string   `json:"url"`
 	SharedWith []string `json:"shared_with"`
+	Public     bool     `json:"public"`
 }

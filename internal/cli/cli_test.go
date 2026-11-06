@@ -392,8 +392,26 @@ func TestShare(t *testing.T) {
 	if got := d["shared_with"].([]any); len(got) != 2 {
 		t.Errorf("unshare = %v", d)
 	}
-	if st := h.ok(dir, "status"); len(st["shared_with"].([]any)) != 2 {
-		t.Errorf("status shared_with = %v", st["shared_with"])
+	if st := h.ok(dir, "status"); len(st["shared_with"].([]any)) != 2 || st["public"] != false {
+		t.Errorf("status = %v", st)
+	}
+
+	d = h.ok(dir, "share", "--public")
+	if d["public"] != true || len(d["shared_with"].([]any)) != 2 || !strings.Contains(d["next"].(string), "unshare --public") {
+		t.Errorf("share --public = %v", d)
+	}
+	if st := h.ok(dir, "status"); st["public"] != true || st["next"] != nil {
+		t.Errorf("status of a public app = %v", st)
+	}
+	if d = h.ok(dir, "deploy"); d["public"] != true || d["next"] != nil {
+		t.Errorf("deploy of a public app = %v", d)
+	}
+	d = h.ok(dir, "unshare", "--public")
+	if d["public"] != false || len(d["shared_with"].([]any)) != 2 {
+		t.Errorf("unshare --public = %v", d)
+	}
+	if st := h.ok(dir, "status"); st["public"] != false {
+		t.Errorf("status after unshare --public = %v", st)
 	}
 }
 
@@ -418,7 +436,7 @@ func TestAppResolution(t *testing.T) {
 
 func TestUsageErrorsExit2(t *testing.T) {
 	h := newHarness(t)
-	for _, args := range [][]string{{"share"}, {"frobnicate"}, {"deploy", "--bogus"}, {"logs", "--limit", "0"}} {
+	for _, args := range [][]string{{"share"}, {"unshare"}, {"share", "--public=false"}, {"frobnicate"}, {"deploy", "--bogus"}, {"logs", "--limit", "0"}} {
 		r := h.run(t.TempDir(), args...)
 		if r.code != 2 || r.Error == nil || r.Error.Code != "usage" || r.Error.Hint == "" {
 			t.Errorf("nimbus %v: exit %d, error %+v; want exit 2 with usage", args, r.code, r.Error)
