@@ -16,7 +16,7 @@ import (
 
 func main() {
 	addr := flag.String("addr", "127.0.0.1:8787", "address to listen on")
-	email := flag.String("email", "you@acme.com", "the user every login signs in as")
+	email := flag.String("email", "you@acme.com", "the user every login signs in as; a @gmail.com address gets a personal account")
 	autoApprove := flag.Bool("auto-approve", false, "approve logins without the browser step")
 	flag.Parse()
 

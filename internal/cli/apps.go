@@ -46,7 +46,7 @@ func (a *App) whoamiCmd() *cobra.Command {
 		Use:   "whoami",
 		Short: "Show who you're logged in as; use it to check the login before other commands",
 		Example: `  $ nimbus whoami
-  {"ok":true,"data":{"email":"you@acme.com","org":"acme","org_name":"Acme","idp":"google","api_url":"https://api.nimbostrat.dev","auth":"login","cli_version":"v0.1.0"}}`,
+  {"ok":true,"data":{"email":"you@acme.com","org":"acme","org_name":"Acme","personal":false,"idp":"google","api_url":"https://api.nimbostrat.dev","auth":"login","cli_version":"v0.1.0"}}`,
 		Args: noArgs,
 		RunE: a.run(func(ctx context.Context, _ []string) (any, error) {
 			sess, err := a.session()
@@ -57,7 +57,7 @@ func (a *App) whoamiCmd() *cobra.Command {
 			if err != nil {
 				return nil, err
 			}
-			return &whoamiResult{Email: me.Email, Org: me.Org.Slug, OrgName: me.Org.Name, IdP: me.IdP,
+			return &whoamiResult{Email: me.Email, Org: me.Org.Slug, OrgName: me.Org.Name, Personal: me.Org.Personal, IdP: me.IdP,
 				APIURL: sess.apiURL, Auth: sess.auth, CLIVersion: Version}, nil
 		}),
 	}
@@ -67,6 +67,7 @@ type whoamiResult struct {
 	Email      string `json:"email"`
 	Org        string `json:"org"`
 	OrgName    string `json:"org_name"`
+	Personal   bool   `json:"personal"` // a personal Google account, for personal projects
 	IdP        string `json:"idp"`
 	APIURL     string `json:"api_url"`
 	Auth       string `json:"auth"`
@@ -74,7 +75,11 @@ type whoamiResult struct {
 }
 
 func (r *whoamiResult) Text() string {
-	return fmt.Sprintf("%s (%s, signed in with %s)\nAPI: %s\nCLI: %s", r.Email, r.OrgName, r.IdP, r.APIURL, r.CLIVersion)
+	org := r.OrgName
+	if r.Personal {
+		org = "personal account"
+	}
+	return fmt.Sprintf("%s (%s, signed in with %s)\nAPI: %s\nCLI: %s", r.Email, org, r.IdP, r.APIURL, r.CLIVersion)
 }
 
 func (a *App) statusCmd() *cobra.Command {
@@ -207,16 +212,19 @@ func (a *App) shareCmd() *cobra.Command {
 	var public bool
 	cmd := &cobra.Command{
 		Use:   "share [email]...",
-		Short: "Give people in your org access to an app, or with --public open it to everyone",
-		Long: `Give people in your org access to an app. The app defaults to --app, then to
-name in ./nimbus.yaml. Prints everyone who has access afterwards.
+		Short: "Give people in your org access to a work app, or with --public open it to everyone",
+		Long: `Give people in your org access to a work app. The app defaults to --app, then
+to name in ./nimbus.yaml. Prints everyone who has access afterwards.
 
 Only addresses in your own org work, and nobody is notified: send them the URL.
 Redeploying never changes who has access.
 
 With --public, anyone on the internet can open the app without signing in, and
 the app gets no X-Viewer-Email header. The share list is kept for when you make
-it private again with nimbus unshare --public.`,
+it private again with nimbus unshare --public.
+
+Sharing by email and --public are for work projects. Personal projects are
+always public, so there's nothing to share: send people the URL.`,
 		Example: `  $ nimbus share lena@acme.com
   {"ok":true,"data":{"app":"renewal-desk","url":"https://renewal-desk.acme.nimbus-apps.dev","shared_with":["you@acme.com","lena@acme.com"],"public":false,"next":"Send them the URL. ..."}}
 
@@ -233,12 +241,14 @@ func (a *App) unshareCmd() *cobra.Command {
 	var public bool
 	cmd := &cobra.Command{
 		Use:   "unshare [email]...",
-		Short: "Take away people's access to an app, or with --public make it private again",
-		Long: `Take away people's access to an app. The app defaults to --app, then to name
-in ./nimbus.yaml. Prints everyone who has access afterwards.
+		Short: "Take away people's access to a work app, or with --public make it private again",
+		Long: `Take away people's access to a work app. The app defaults to --app, then to
+name in ./nimbus.yaml. Prints everyone who has access afterwards.
 
 With --public, a public app becomes private again: viewers have to sign in, and
-only the people it's shared with get in.`,
+only the people it's shared with get in.
+
+Personal projects are always public and can't be made private.`,
 		Example: `  $ nimbus unshare lena@acme.com
   {"ok":true,"data":{"app":"renewal-desk","url":"https://renewal-desk.acme.nimbus-apps.dev","shared_with":["you@acme.com"],"public":false}}
 

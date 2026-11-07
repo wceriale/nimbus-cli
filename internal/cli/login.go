@@ -18,7 +18,7 @@ func (a *App) loginCmd() *cobra.Command {
 	var wait bool
 	cmd := &cobra.Command{
 		Use:   "login",
-		Short: "Log in with your company account (the only step that needs a human)",
+		Short: "Log in with your Google account (the only step that needs a human)",
 		Long: `Log in with a device code (RFC 8628). This is the only step that needs a human.
 
 In a terminal, nimbus login opens the browser and waits until you approve.
@@ -27,14 +27,18 @@ When stdout isn't a terminal (an agent), it returns right away with
 "status": "pending", a verification_url and a user_code. Show the user the
 URL, and after they approve, run nimbus login again: it returns
 "status": "logged_in". Running it while already logged in just returns
-"logged_in".`,
+"logged_in".
+
+"personal": true means the user signed in with a personal Google account,
+such as Gmail, which hosts personal projects. A work Google account from a
+company on nimbus hosts work projects.`,
 		Example: `  # Agent, step 1: get a URL for the user
   $ nimbus login
   {"ok":true,"data":{"status":"pending","api_url":"https://api.nimbostrat.dev","verification_url":"https://auth.nimbostrat.dev/device?code=WDJB-MJHT","user_code":"WDJB-MJHT","expires_in":600,"browser_opened":false,"next":"Show the user verification_url ..."}}
 
   # Agent, step 2: after the user approves
   $ nimbus login
-  {"ok":true,"data":{"status":"logged_in","email":"you@acme.com","org":"acme","api_url":"https://api.nimbostrat.dev","auth":"login"}}`,
+  {"ok":true,"data":{"status":"logged_in","email":"you@acme.com","org":"acme","personal":false,"api_url":"https://api.nimbostrat.dev","auth":"login"}}`,
 		Args: noArgs,
 		RunE: a.run(func(ctx context.Context, _ []string) (any, error) {
 			return a.login(ctx, wait || a.StdoutIsTTY)
@@ -48,6 +52,7 @@ type loginResult struct {
 	Status          string `json:"status"` // pending or logged_in
 	Email           string `json:"email,omitempty"`
 	Org             string `json:"org,omitempty"`
+	Personal        *bool  `json:"personal,omitempty"` // set once logged in
 	APIURL          string `json:"api_url"`
 	Auth            string `json:"auth,omitempty"`
 	VerificationURL string `json:"verification_url,omitempty"`
@@ -60,6 +65,9 @@ type loginResult struct {
 func (r *loginResult) Text() string {
 	if r.Status == "pending" {
 		return fmt.Sprintf("Open this URL and approve the code %s:\n  %s\nThen run `nimbus login` again.", r.UserCode, r.VerificationURL)
+	}
+	if r.Personal != nil && *r.Personal {
+		return fmt.Sprintf("Logged in to %s as %s (personal account).", r.APIURL, r.Email)
 	}
 	return fmt.Sprintf("Logged in to %s as %s (%s).", r.APIURL, r.Email, r.Org)
 }
@@ -229,7 +237,7 @@ func (a *App) pendingResult(p *config.PendingLogin, browserOpened *bool) *loginR
 }
 
 func loggedIn(base string, me *api.Me, auth string) *loginResult {
-	return &loginResult{Status: "logged_in", Email: me.Email, Org: me.Org.Slug, APIURL: base, Auth: auth}
+	return &loginResult{Status: "logged_in", Email: me.Email, Org: me.Org.Slug, Personal: &me.Org.Personal, APIURL: base, Auth: auth}
 }
 
 func (a *App) logoutCmd() *cobra.Command {

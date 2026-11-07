@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -30,9 +31,13 @@ type harness struct {
 	onSleep func()   // runs when the CLI sleeps between polls, if set
 }
 
-func newHarness(t *testing.T) *harness {
+func newHarness(t *testing.T) *harness { return newHarnessFor(t, "you@acme.com") }
+
+// newHarnessFor signs every login in as email. A @gmail.com address gets a
+// personal account.
+func newHarnessFor(t *testing.T, email string) *harness {
 	t.Helper()
-	f := fakeapi.New("you@acme.com")
+	f := fakeapi.New(email)
 	srv := httptest.NewServer(f.Handler())
 	t.Cleanup(srv.Close)
 	return &harness{t: t, fake: f, srv: srv, cfg: t.TempDir(), env: map[string]string{"NIMBUS_API_URL": srv.URL}}
@@ -147,8 +152,11 @@ func TestLoginIsTwoStepForAgents(t *testing.T) {
 	}
 
 	h.fake.ApproveAll()
+	if _, ok := d["personal"]; ok {
+		t.Errorf("pending login reports personal: %v", d)
+	}
 	d = h.ok(dir, "login")
-	if d["status"] != "logged_in" || d["email"] != "you@acme.com" || d["org"] != "acme" {
+	if d["status"] != "logged_in" || d["email"] != "you@acme.com" || d["org"] != "acme" || d["personal"] != false {
 		t.Fatalf("login after approval = %v", d)
 	}
 	fi, err := os.Stat(filepath.Join(h.cfg, "credentials.json"))
@@ -158,7 +166,7 @@ func TestLoginIsTwoStepForAgents(t *testing.T) {
 	if d := h.ok(dir, "login"); d["status"] != "logged_in" {
 		t.Errorf("login while logged in = %v", d)
 	}
-	if d := h.ok(dir, "whoami"); d["email"] != "you@acme.com" || d["auth"] != "login" {
+	if d := h.ok(dir, "whoami"); d["email"] != "you@acme.com" || d["auth"] != "login" || d["personal"] != false {
 		t.Errorf("whoami = %v", d)
 	}
 }
@@ -289,8 +297,8 @@ func TestDeploy(t *testing.T) {
 		"node_modules/x/index.js": "dep",
 	})
 
-	d := h.ok(dir, "deploy")
-	if d["app"] != "renewal-desk" || d["state"] != "live" || d["version"] != 1.0 || d["manifest_created"] != true {
+	d := h.ok(dir, "deploy", "--work")
+	if d["app"] != "renewal-desk" || d["account"] != "work" || d["state"] != "live" || d["version"] != 1.0 || d["manifest_created"] != true {
 		t.Fatalf("deploy = %v", d)
 	}
 	if !strings.Contains(d["next"].(string), "nimbus share") {
@@ -302,12 +310,13 @@ func TestDeploy(t *testing.T) {
 	if got, want := h.fake.UploadedFiles("renewal-desk"), []string{".gitignore", "app.py", "nimbus.yaml"}; !slices.Equal(got, want) {
 		t.Errorf("uploaded %v, want %v", got, want)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "nimbus.yaml")); err != nil {
-		t.Errorf("nimbus.yaml wasn't written: %v", err)
+	if b, err := os.ReadFile(filepath.Join(dir, "nimbus.yaml")); err != nil || !strings.Contains(string(b), "\naccount: work\n") {
+		t.Errorf("nimbus.yaml = %q, %v; want it to say account: work", b, err)
 	}
 
+	// The answer is saved, so redeploys don't need the flag.
 	again := h.ok(dir, "deploy")
-	if again["unchanged"] != true || again["version"] != 1.0 || again["manifest_created"] != false {
+	if again["unchanged"] != true || again["version"] != 1.0 || again["manifest_created"] != false || again["account"] != "work" {
 		t.Errorf("redeploy of the same source = %v, want unchanged version 1", again)
 	}
 
@@ -328,7 +337,7 @@ func TestDeployFailureCarriesLogTail(t *testing.T) {
 		LogTail: []string{"Running on http://127.0.0.1:5000"},
 	})
 	dir := appDir(t, "planner", map[string]string{"app.py": "x"})
-	e := h.fail("start_failed", dir, "deploy")
+	e := h.fail("start_failed", dir, "deploy", "--work")
 	if len(e.LogTail) != 1 || !strings.Contains(e.Hint, "$PORT") || !strings.Contains(e.Hint, "nimbus logs planner --build") {
 		t.Errorf("failure = %+v", e)
 	}
@@ -346,7 +355,7 @@ func TestDeployNoWaitThenStatus(t *testing.T) {
 	h := newHarness(t)
 	h.login()
 	dir := appDir(t, "planner", map[string]string{"app.py": "x"})
-	d := h.ok(dir, "deploy", "--no-wait")
+	d := h.ok(dir, "deploy", "--work", "--no-wait")
 	if d["state"] != "queued" || !strings.Contains(d["next"].(string), "nimbus status") {
 		t.Fatalf("deploy --no-wait = %v", d)
 	}
@@ -365,19 +374,120 @@ func TestDeployNameRules(t *testing.T) {
 	h := newHarness(t)
 	h.login()
 	h.fake.AddApp("taken", "someone@acme.com")
-	h.fail("name_taken", appDir(t, "taken", map[string]string{"app.py": "x"}), "deploy")
-	h.fail("invalid_name", appDir(t, "x", map[string]string{"app.py": "x"}), "deploy")
-	if d := h.ok(appDir(t, "x", map[string]string{"app.py": "x"}), "deploy", "--app", "my-tool"); d["app"] != "my-tool" {
+	h.fail("name_taken", appDir(t, "taken", map[string]string{"app.py": "x"}), "deploy", "--work")
+	h.fail("invalid_name", appDir(t, "x", map[string]string{"app.py": "x"}), "deploy", "--work")
+	if d := h.ok(appDir(t, "x", map[string]string{"app.py": "x"}), "deploy", "--work", "--app", "my-tool"); d["app"] != "my-tool" {
 		t.Errorf("deploy --app = %v", d)
 	}
 	h.fail("invalid_manifest", appDir(t, "shared", map[string]string{"nimbus.yaml": "name: shared\nshare: [a@acme.com]\n"}), "deploy")
+}
+
+// Until nimbus.yaml says whether a project is personal or work, deploy stops
+// and tells the agent to ask the user. It does so before the login check and
+// before writing anything.
+func TestDeployAsksPersonalOrWork(t *testing.T) {
+	h := newHarness(t)
+	dir := appDir(t, "planner", map[string]string{"app.py": "x"})
+	r := h.run(dir, "deploy")
+	if r.code != 2 || r.Error == nil || r.Error.Code != "ask_user" ||
+		!strings.Contains(r.Error.Message, "Ask the user") || !strings.Contains(r.Error.Hint, "--personal") || !strings.Contains(r.Error.Hint, "--work") {
+		t.Fatalf("first deploy = exit %d, %+v; want exit 2 with ask_user", r.code, r.Error)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "nimbus.yaml")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("ask_user wrote nimbus.yaml: %v", err)
+	}
+
+	// A nimbus.yaml from before accounts existed asks once too.
+	before := "# Planner\nname: planner\nport: 8080\n"
+	old := appDir(t, "old", map[string]string{"app.py": "x", "nimbus.yaml": before})
+	if r := h.run(old, "deploy"); r.code != 2 || r.Error == nil || r.Error.Code != "ask_user" {
+		t.Errorf("deploy of an old manifest = exit %d, %+v; want ask_user", r.code, r.Error)
+	}
+	h.login()
+	if d := h.ok(old, "deploy", "--work"); d["app"] != "planner" || d["account"] != "work" || d["manifest_created"] != false {
+		t.Errorf("deploy --work of an old manifest = %v", d)
+	}
+	if b, _ := os.ReadFile(filepath.Join(old, "nimbus.yaml")); string(b) != before+"account: work\n" {
+		t.Errorf("nimbus.yaml = %q, want the old content plus account: work", b)
+	}
+	if d := h.ok(old, "deploy"); d["unchanged"] != true || d["account"] != "work" {
+		t.Errorf("redeploy without a flag = %v", d)
+	}
+	h.ok(old, "deploy", "--work")
+	if e := h.fail("account_conflict", old, "deploy", "--personal"); !strings.Contains(e.Hint, "nimbus.yaml") {
+		t.Errorf("account_conflict hint = %q", e.Hint)
+	}
+}
+
+// The project's account has to match the login: a personal project can't go
+// into a company's org, and a work project can't go under a personal account.
+func TestDeployWrongAccount(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+	dir := appDir(t, "planner", map[string]string{"app.py": "x"})
+	e := h.fail("wrong_account", dir, "deploy", "--personal")
+	if !strings.Contains(e.Message, "you@acme.com") || !strings.Contains(e.Hint, "nimbus logout") || !strings.Contains(e.Hint, "personal Google account") {
+		t.Errorf("personal project, work login: %+v", e)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "nimbus.yaml")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("wrong_account wrote nimbus.yaml: %v", err)
+	}
+
+	h = newHarnessFor(t, "you@gmail.com")
+	h.login()
+	e = h.fail("wrong_account", dir, "deploy", "--work")
+	if !strings.Contains(e.Message, "you@gmail.com") || !strings.Contains(e.Hint, "work Google account") || !strings.Contains(e.Hint, "personal project instead") {
+		t.Errorf("work project, personal login: %+v", e)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "nimbus.yaml")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("wrong_account wrote nimbus.yaml: %v", err)
+	}
+}
+
+func TestPersonalProject(t *testing.T) {
+	h := newHarnessFor(t, "you@gmail.com")
+	h.ok(t.TempDir(), "login")
+	h.fake.ApproveAll()
+	if d := h.ok(t.TempDir(), "login"); d["status"] != "logged_in" || d["personal"] != true || d["org"] != "u-you" {
+		t.Fatalf("personal login = %v", d)
+	}
+	if d := h.ok(t.TempDir(), "whoami"); d["personal"] != true || d["email"] != "you@gmail.com" {
+		t.Errorf("whoami = %v", d)
+	}
+
+	dir := appDir(t, "planner", map[string]string{"app.py": "x"})
+	d := h.ok(dir, "deploy", "--personal")
+	if d["account"] != "personal" || d["public"] != true || !strings.Contains(d["url"].(string), ".u-you.") {
+		t.Fatalf("personal deploy = %v", d)
+	}
+	if next, _ := d["next"].(string); !strings.Contains(next, "public") || !strings.Contains(next, "X-Viewer-Email") || strings.Contains(next, "nimbus share") {
+		t.Errorf("personal deploy next = %q", next)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "nimbus.yaml")); !strings.Contains(string(b), "\naccount: personal\n") {
+		t.Errorf("nimbus.yaml = %q", b)
+	}
+	if st := h.ok(dir, "status"); st["public"] != true || st["next"] != nil {
+		t.Errorf("status = %v", st)
+	}
+
+	// Personal apps are always public: no sharing by email, no going private.
+	h.fail("personal_app", dir, "share", "lena@gmail.com")
+	h.fail("personal_app", dir, "unshare", "--public")
+	if d := h.ok(dir, "share", "--public"); d["public"] != true {
+		t.Errorf("share --public = %v", d)
+	}
+
+	for i := range 9 {
+		h.fake.AddApp(fmt.Sprintf("app-%d", i), "you@gmail.com")
+	}
+	h.fail("app_limit", appDir(t, "eleventh", map[string]string{"app.py": "x"}), "deploy", "--personal")
 }
 
 func TestShare(t *testing.T) {
 	h := newHarness(t)
 	h.login()
 	dir := appDir(t, "planner", map[string]string{"app.py": "x"})
-	h.ok(dir, "deploy")
+	h.ok(dir, "deploy", "--work")
 
 	d := h.ok(dir, "share", "Lena@Acme.com", "priya@acme.com")
 	if got := d["shared_with"].([]any); len(got) != 3 || !slices.Contains(got, any("lena@acme.com")) {
@@ -422,7 +532,7 @@ func TestAppResolution(t *testing.T) {
 	h.fail("app_not_specified", empty, "status")
 	h.fail("app_not_found", empty, "status", "nope")
 	dir := appDir(t, "planner", map[string]string{"app.py": "x"})
-	h.ok(dir, "deploy")
+	h.ok(dir, "deploy", "--work")
 	if d := h.ok(empty, "status", "--app", "planner"); d["name"] != "planner" {
 		t.Errorf("status --app = %v", d)
 	}
@@ -436,7 +546,8 @@ func TestAppResolution(t *testing.T) {
 
 func TestUsageErrorsExit2(t *testing.T) {
 	h := newHarness(t)
-	for _, args := range [][]string{{"share"}, {"unshare"}, {"share", "--public=false"}, {"frobnicate"}, {"deploy", "--bogus"}, {"logs", "--limit", "0"}} {
+	for _, args := range [][]string{{"share"}, {"unshare"}, {"share", "--public=false"}, {"frobnicate"}, {"deploy", "--bogus"},
+		{"deploy", "--personal", "--work"}, {"logs", "--limit", "0"}} {
 		r := h.run(t.TempDir(), args...)
 		if r.code != 2 || r.Error == nil || r.Error.Code != "usage" || r.Error.Hint == "" {
 			t.Errorf("nimbus %v: exit %d, error %+v; want exit 2 with usage", args, r.code, r.Error)

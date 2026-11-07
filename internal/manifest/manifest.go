@@ -19,15 +19,24 @@ const FileName = "nimbus.yaml"
 
 // Manifest is the whole of nimbus.yaml in v0.1.
 type Manifest struct {
-	Name   string   `yaml:"name"`
-	Port   int      `yaml:"port,omitempty"`
-	Scopes []string `yaml:"scopes,omitempty"`
+	Name    string   `yaml:"name"`
+	Port    int      `yaml:"port,omitempty"`
+	Account string   `yaml:"account,omitempty"` // Personal or Work; "" until the user has said
+	Scopes  []string `yaml:"scopes,omitempty"`
 }
+
+// The values of account. A personal project runs under a personal Google
+// account and is always public; a work project runs in a company's org,
+// private to the people it's shared with.
+const (
+	Personal = "personal"
+	Work     = "work"
+)
 
 var (
 	nameRE  = regexp.MustCompile(`^[a-z]([a-z0-9-]*[a-z0-9])?$`)
 	scopeRE = regexp.MustCompile(`^[a-z0-9][a-z0-9_.:-]*$`)
-	fields  = []string{"name", "port", "scopes"}
+	fields  = []string{"name", "port", "account", "scopes"}
 )
 
 // ValidName reports whether s can be an app name. Names become DNS labels.
@@ -97,13 +106,16 @@ func Parse(b []byte) (*Manifest, error) {
 				"nimbus.yaml has a `share:` field, but sharing isn't part of the manifest.")
 		}
 		if !slices.Contains(fields, k) {
-			return nil, invalid("Allowed fields: name, port, scopes. Run `nimbus docs` for the format.",
+			return nil, invalid("Allowed fields: name, port, account, scopes. Run `nimbus docs` for the format.",
 				"nimbus.yaml has an unknown field `%s`.", k)
 		}
 	}
 	var m Manifest
 	if err := yaml.Unmarshal(b, &m); err != nil {
 		return nil, invalid("Run `nimbus docs` for the format.", "nimbus.yaml has a field of the wrong type: %v", err)
+	}
+	if _, ok := raw["account"]; ok && m.Account == "" {
+		return nil, invalidAccount("")
 	}
 	if err := m.Validate(); err != nil {
 		return nil, err
@@ -124,6 +136,9 @@ func (m *Manifest) Validate() error {
 		return invalid("Use a port between 1 and 65535, or leave `port` out to get 8080.",
 			"`port: %d` in nimbus.yaml is out of range.", m.Port)
 	}
+	if m.Account != "" && m.Account != Personal && m.Account != Work {
+		return invalidAccount(m.Account)
+	}
 	for _, s := range m.Scopes {
 		if !scopeRE.MatchString(s) {
 			return invalid("Scopes look like `google.sheets.read`. Run `nimbus docs` for the list.",
@@ -134,16 +149,46 @@ func (m *Manifest) Validate() error {
 }
 
 // Write creates dir/nimbus.yaml for a new app. It never overwrites a file.
-func Write(dir, name string) error {
+func Write(dir, name, account string) error {
 	f, err := os.OpenFile(filepath.Join(dir, FileName), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(f, "# Nimbus app manifest. Run `nimbus docs` for the format.\nname: %s\n", name)
+	_, err = fmt.Fprintf(f, "# Nimbus app manifest. Run `nimbus docs` for the format.\nname: %s\naccount: %s\n", name, account)
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}
 	return err
+}
+
+// SetAccount adds `account:` to an existing dir/nimbus.yaml that has none,
+// appending a line so the rest of the file stays exactly as it was. If the
+// line can't simply be appended (a flow-style mapping, say), it changes
+// nothing and asks for the line to be added by hand.
+func SetAccount(dir, account string) error {
+	path := filepath.Join(dir, FileName)
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	if len(b) > 0 && b[len(b)-1] != '\n' {
+		b = append(b, '\n')
+	}
+	b = append(b, "account: "+account+"\n"...)
+	if m, err := Parse(b); err != nil || m.Account != account {
+		return invalid(fmt.Sprintf("Add the line `account: %s` to nimbus.yaml, then run `nimbus deploy` again.", account),
+			"Couldn't add `account: %s` to nimbus.yaml automatically.", account)
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, b, fi.Mode().Perm())
+}
+
+func invalidAccount(value string) *output.Error {
+	return invalid("Use `account: personal` or `account: work`, or remove the line to be asked again.",
+		"`account: %s` in nimbus.yaml isn't valid.", value)
 }
 
 func invalid(hint, format string, args ...any) *output.Error {

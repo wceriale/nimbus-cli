@@ -42,6 +42,9 @@ type Me struct {
 type Org struct {
 	Slug string `json:"slug"`
 	Name string `json:"name"`
+	// Personal is a personal Google account's own org, whose apps are always
+	// public. Servers from before personal accounts leave it out.
+	Personal bool `json:"personal"`
 }
 
 // App states: new, building, live, failed.

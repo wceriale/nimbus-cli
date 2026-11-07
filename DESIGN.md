@@ -2,7 +2,7 @@
 
 `nimbus` is how agents use Nimbus. This file is both the CLI's spec and its feature tracker.
 
-Last updated 2026-11-05. Status: live. The API is `https://api.nimbostrat.dev`, with Google sign-in, and apps run at `https://<app>.<org>.nimbus-apps.dev`. v0.0.1 is released, but it still defaults to the old placeholder API; the next release defaults to the live one.
+Last updated 2026-11-06. Status: live. The API is `https://api.nimbostrat.dev`, with Google sign-in, and apps run at `https://<app>.<org>.nimbus-apps.dev`. v0.0.1 is released, but it still defaults to the old placeholder API; the next release defaults to the live one.
 
 **v0.1 scope:** hosting, Google sign-in, and sharing. Apps keep their data in a persistent `/data` directory (SQLite works well there) and have no outside data access yet. Connectors and `scopes` come in v0.2.
 
@@ -19,17 +19,17 @@ What a new user does in v0.1, from nothing to a coworker using the app. It cover
 
 **Builder side**
 1. **Install:** the agent runs `curl -fsSL https://raw.githubusercontent.com/wceriale/nimbus-cli/main/install.sh | sh`.
-2. **Sign in:** the agent runs `nimbus login` and shows the user a link. The user signs in with their Google Workspace account. There's no separate sign-up or org setup.
+2. **Sign in:** the agent runs `nimbus login` and shows the user a link. The user signs in with Google: their company's Workspace account for work projects, or a personal account such as Gmail for personal ones. There's no separate sign-up or org setup.
 3. **Learn the rules:** the agent runs `nimbus docs` (or loads the skill) before it writes any code.
 4. **Build:** the agent writes the app, starting from the React example.
-5. **Deploy:** the agent runs `nimbus deploy` and gets the app's URL. At first, only the person who deployed it can open it.
+5. **Deploy:** the agent asks the user whether it's a personal or a work project, runs `nimbus deploy --personal` or `--work`, and gets the app's URL. A work app starts out visible only to the person who deployed it. A personal app is public.
 6. **Share:** the agent runs `nimbus share lena@acme.com`. Only coworkers in the same Google Workspace can be added.
 
 **Viewer side**
 1. Lena opens the URL and signs in with her Google Workspace account. She needs no other account.
 2. If she has access, she sees the app, and the app knows who she is. If not, she sees a page telling her to ask the owner.
 
-Personal @gmail.com accounts aren't supported in v0.1.
+Personal Google accounts, such as @gmail.com, host personal projects only, and those are always public: there's no sharing by email.
 
 ## Tracker
 P0 is needed for the first end-to-end deploy. P1 must land before anyone outside the team uses it. Status values are todo, doing, and done. **"Done" means implemented and tested against `internal/fakeapi`.** The P0 commands also ran end to end against `nimbus-server` on localhost on 2026-10-28, and login, deploy, and logs ran against the live server the same day.
@@ -59,6 +59,7 @@ P0 is needed for the first end-to-end deploy. P1 must land before anyone outside
 | 24 | `nimbus logout`: revoke the login on the server (`POST /oauth/revoke`), then delete it locally | P1 | done |
 | 17 | `nimbus share --org` (anyone in the org who has the link) | P1 | todo |
 | 25 | `nimbus share --public` / `unshare --public` (anyone on the internet, no sign-in) | P1 | done |
+| 26 | Personal projects: `deploy --personal`/`--work`, `ask_user` until `nimbus.yaml` has `account`, `wrong_account` against the login | P1 | done |
 | 20 | CI check that the guide's examples still run | P1 | todo |
 | 18 | `scopes` in the manifest, plus consent errors | v0.2 | todo |
 
@@ -88,7 +89,7 @@ Notes:
 nimbus login               device-flow login; the only step that needs a human
 nimbus logout              revoke this machine's login and delete it
 nimbus whoami              email, org, API URL, CLI version; use as a preflight check
-nimbus deploy [dir]        build and ship a directory (default .), then print the URL
+nimbus deploy [dir]        build and ship a directory (default .), then print the URL; --personal or --work
 nimbus share <email>...    give viewers access; --public opens it to anyone, no sign-in
 nimbus unshare <email>...  take access away; --public makes it private again
 nimbus status [app]        URL, version, state (building|live|failed), who has access
@@ -114,11 +115,12 @@ nimbus docs                the agent guide, printed as markdown
 
 **`nimbus deploy`**
 - **No manifest:** it writes `nimbus.yaml`, taking `name` from the directory name. There's no `nimbus init`.
+- **Personal or work:** until `nimbus.yaml` has `account`, deploy fails with `ask_user` (exit 2) before the login check and before writing anything. The message tells the agent to ask the user and not to choose. The agent then passes `--personal` or `--work`, and deploy saves it as `account`, appending one line to an existing `nimbus.yaml`. Deploy checks it against `GET /v1/me`'s `org.personal` and fails with `wrong_account` if they don't fit. A flag that disagrees with a saved `account` fails with `account_conflict`.
 - **Upload:** it respects `.gitignore` and always skips `.git`, `node_modules`, `.venv`, `__pycache__`, and **`.env*`**, because apps hold no secrets. The limit is 100 MB.
 - **Build:** v0.1 needs a `Dockerfile` at the app's root. Without one, the deploy fails with `build_failed` and a hint to add one. Buildpacks may come later.
 - **Waiting:** it waits until the new version serves traffic, up to 10 minutes. A build takes 1–3 minutes, so the agent guide tells agents to raise their command timeout, or to use `--no-wait` and then poll `nimbus status`. Once the upload finishes, killing the CLI doesn't stop the deploy.
 - **Unchanged source:** if the source matches the live version, it creates no new version and returns `"unchanged": true`.
-- **Who can see it:** after the first deploy, only the deployer can open the app, and the output says so:
+- **Who can see it:** after the first deploy of a work project, only the deployer can open the app, and the output says so. A personal project is public:
   ```json
   {"ok":true,"data":{"app":"renewal-desk","url":"https://renewal-desk.acme.nimbus-apps.dev","version":3,"state":"live","shared_with":["you@acme.com"],"manifest_created":false}}
   ```
@@ -129,6 +131,7 @@ nimbus docs                the agent guide, printed as markdown
 
 **`nimbus share` / `nimbus unshare`**
 - **Who:** v0.1 only accepts email addresses in your own org.
+- **Personal projects:** always public, so sharing by email or `unshare --public` fails with the server's `personal_app`.
 - **Output:** the full access list, plus the URL to send people. v0.1 sends no notification.
 - **Where sharing lives:** only on the server. Redeploying never changes who has access, and the manifest has no `share:` field.
 - **Public:** `nimbus share --public` lets anyone on the internet open the app without signing in, and the app gets no `X-Viewer-Email`. `nimbus unshare --public` makes it private again, with its share list intact. Apps start private.
@@ -162,6 +165,11 @@ nimbus docs                the agent guide, printed as markdown
 | `not_logged_in` | Credentials are missing, expired, or rejected | Run `nimbus login` and show the user the URL |
 | `login_expired`, `login_denied` | The device code timed out, or the user denied it | Run `nimbus login` again |
 | `org_not_enabled` | The user's org isn't onboarded | Tell the user Nimbus is invite-only for now |
+| `ask_user` | A decision only the user can make (exit 2): personal or work project | Ask the user, then pass `--personal` or `--work` |
+| `wrong_account` | The project's `account` doesn't fit the login | Log out and in with the other kind of account, or ask the user |
+| `account_conflict` | `--personal`/`--work` disagrees with `account` in `nimbus.yaml` | Drop the flag, or change `account` |
+| `personal_app` | Sharing by email, or making private, a personal app | Send the URL instead |
+| `app_limit` | A personal account has its maximum number of apps (10) | Tell the user |
 | `api_url_not_set`, `invalid_api_url` | No usable `NIMBUS_API_URL` | Set it |
 | `cli_outdated` | The server requires a newer CLI | Re-run the install one-liner |
 | `invalid_manifest`, `invalid_name` | `nimbus.yaml` or the app name is invalid | Fix the field it names |
@@ -182,13 +190,14 @@ This is the whole file in v0.1:
 ```yaml
 name: renewal-desk      # required; becomes renewal-desk.<org>.<apps-domain>
 port: 8080              # optional; the app receives it as $PORT
+account: work           # personal or work; written by deploy --personal/--work
 ```
 The app's `Dockerfile` defines its runtime, and sharing is a command. `scopes` returns with connectors in v0.2.
 
 ## The app contract
 Without docs, this is what agents get wrong, so `nimbus docs` opens with it.
 1. Listen on `0.0.0.0:$PORT`.
-2. Don't build a login. The viewer's email is in the `X-Viewer-Email` request header. Trust it, because only Nimbus can reach the app. If the header is missing, the app is running locally. Browser code can't read request headers, so a React app's server exposes `GET /api/me`, which returns the header.
+2. Don't build a login. The viewer's email is in the `X-Viewer-Email` request header. Trust it, because only Nimbus can reach the app. If the header is missing, the app is public (every personal project is) or running locally. Browser code can't read request headers, so a React app's server exposes `GET /api/me`, which returns the header.
 3. Don't hold secrets: no API keys in the code, and `.env*` files aren't uploaded.
 4. Keep state in `$NIMBUS_DATA_DIR` (`/data` on Nimbus), a directory on a local disk. It survives restarts, idle stops, and redeploys, and SQLite (including WAL mode) works well there. Locally, default the directory to `./data`.
 5. Only `$NIMBUS_DATA_DIR` and `/tmp` are writable: the app runs as uid 10001 on a read-only filesystem, with 512 MB of memory. `HOME` is `/tmp` unless the image sets it. `/tmp` is in memory and cleared on restart.
@@ -289,6 +298,7 @@ Layout:
 | 2026-10-26 | The Claude Code skill and a React + SQLite example are P0 | The agent has to know the app contract before it writes code, not after its first deploy fails. |
 | 2026-10-28 | The default API is `https://api.nimbostrat.dev`, and `api_url_placeholder` is gone | Real domains exist: `nimbostrat.dev` for `api` and `auth`, `nimbus-apps.dev` for apps. v0.0.1 keeps the placeholder until the next release. |
 | 2026-11-05 | Public apps are a flag on `share`/`unshare` (`--public`), not a new command | Matches the planned `--org`, keeps the command list short, and making an app public goes through the same all-or-nothing `PATCH`. |
+| 2026-11-06 | Personal or work is asked through an `ask_user` error on deploy, and saved as `account` in `nimbus.yaml` | A prompt would hang an agent, and docs alone get skipped. An error the agent can't get past, whose message says to ask, makes the user decide. Saving it means one question per project, and checking it against the login keeps personal projects out of company orgs. |
 
 ## Open questions
 - "Nimbus" is a crowded name: Mozilla's experimentation platform, Status's Ethereum client, and Nimbus Note all use it. It's fine as a working name, but check trademarks and domain availability before launch.

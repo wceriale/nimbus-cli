@@ -28,7 +28,11 @@ import (
 	"time"
 )
 
-const maxUpload = 100 << 20
+const (
+	maxUpload = 100 << 20
+	// maxPersonalApps is how many apps a personal account can have.
+	maxPersonalApps = 10
+)
 
 var nameRE = regexp.MustCompile(`^[a-z]([a-z0-9-]*[a-z0-9])?$`)
 
@@ -36,8 +40,12 @@ var nameRE = regexp.MustCompile(`^[a-z]([a-z0-9-]*[a-z0-9])?$`)
 // change behavior while serving only through methods.
 type Fake struct {
 	// Email is the user every device login signs in as. Its domain is the
-	// org's domain.
+	// org's domain, unless Personal is set.
 	Email string
+	// Personal makes the user's org a personal one, as for a Gmail account:
+	// its slug is u-<local part>, its apps are always public, and it can
+	// have at most 10. New sets it for @gmail.com addresses.
+	Personal bool
 	// AutoApprove approves device codes on their first poll, skipping the browser.
 	AutoApprove bool
 	// AccessTTL is how long access tokens live.
@@ -100,6 +108,7 @@ type upload struct {
 func New(email string) *Fake {
 	return &Fake{
 		Email:     email,
+		Personal:  strings.HasSuffix(email, "@gmail.com"),
 		AccessTTL: time.Hour,
 		devices:   map[string]*device{},
 		access:    map[string]session{},
@@ -156,7 +165,7 @@ func (f *Fake) AddApp(name, owner string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	now := time.Now()
-	f.apps[name] = &app{name: name, owner: owner, shares: map[string]bool{}, created: now, updated: now}
+	f.apps[name] = &app{name: name, owner: owner, shares: map[string]bool{}, public: f.Personal, created: now, updated: now}
 }
 
 // UploadedFiles lists the paths in the most recent tarball sent for an app.
@@ -329,10 +338,13 @@ func (f *Fake) authed(h func(http.ResponseWriter, *http.Request, string)) http.H
 }
 
 func (f *Fake) me(w http.ResponseWriter, _ *http.Request, email string) {
-	slug := f.orgSlug()
+	slug, name := f.orgSlug(), email
+	if !f.Personal {
+		name = strings.ToUpper(slug[:1]) + slug[1:]
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"email": email,
-		"org":   map[string]string{"slug": slug, "name": strings.ToUpper(slug[:1]) + slug[1:]},
+		"org":   map[string]any{"slug": slug, "name": name, "personal": f.Personal},
 		"idp":   "google",
 	})
 }
@@ -373,8 +385,21 @@ func (f *Fake) ensureApp(w http.ResponseWriter, r *http.Request, email string) {
 		writeJSON(w, http.StatusOK, f.appJSON(a))
 		return
 	}
+	if f.Personal {
+		n := 0
+		for _, a := range f.apps {
+			if a.owner == email {
+				n++
+			}
+		}
+		if n >= maxPersonalApps {
+			writeErr(w, http.StatusForbidden, "app_limit", fmt.Sprintf("A personal account can have at most %d apps.", maxPersonalApps),
+				"Tell the user they've reached the limit for personal projects.", nil)
+			return
+		}
+	}
 	now := time.Now()
-	a := &app{name: name, owner: email, shares: map[string]bool{}, created: now, updated: now}
+	a := &app{name: name, owner: email, shares: map[string]bool{}, public: f.Personal, created: now, updated: now}
 	f.apps[name] = a
 	writeJSON(w, http.StatusCreated, f.appJSON(a))
 }
@@ -557,6 +582,11 @@ func (f *Fake) updateShares(w http.ResponseWriter, r *http.Request, email string
 		return out
 	}
 	add, remove := norm(in.Add), norm(in.Remove)
+	if f.Personal && (len(add) > 0 || len(remove) > 0 || in.Public != nil && !*in.Public) {
+		writeErr(w, http.StatusUnprocessableEntity, "personal_app", "Personal projects are always public: anyone with the URL can open them.",
+			"Sharing by email and private apps are for work projects. Send people the URL instead.", nil)
+		return
+	}
 	var invalid, outside []string
 	for _, e := range append(slices.Clone(add), remove...) {
 		local, domain, ok := strings.Cut(e, "@")
@@ -725,6 +755,10 @@ func (f *Fake) domain() string {
 }
 
 func (f *Fake) orgSlug() string {
+	if f.Personal {
+		local, _, _ := strings.Cut(f.Email, "@")
+		return "u-" + strings.NewReplacer(".", "-", "_", "-", "+", "-").Replace(local)
+	}
 	s, _, _ := strings.Cut(f.domain(), ".")
 	return s
 }

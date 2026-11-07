@@ -12,10 +12,11 @@ func (a *App) rootCmd() *cobra.Command {
 	cobra.EnableCommandSorting = false
 	root := &cobra.Command{
 		Use:   "nimbus",
-		Short: "Deploy and share internal web apps behind your company's sign-in",
-		Long: `nimbus takes a web app you already wrote and runs it at a private URL behind
-your company's sign-in. You share it by email, and every data access in the app
-runs as the person viewing it.
+		Short: "Deploy web apps: work apps behind your company's sign-in, personal ones public",
+		Long: `nimbus takes a web app you already wrote and runs it at a URL. A work project
+is private, behind your company's sign-in: you share it by email, and the app
+knows who's viewing it. A personal project, under a personal Google account
+such as Gmail, is public.
 
 Agents: run ` + "`nimbus docs`" + ` first. Output is one JSON object on stdout whenever
 stdout isn't a terminal.`,
