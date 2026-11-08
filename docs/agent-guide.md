@@ -52,10 +52,12 @@ After the first deploy of a work project, only the user who deployed it can open
 6. **Nimbus only checks that the app accepts connections on `$PORT`.** It never sends HTTP requests of its own, so every request the app sees comes from a viewer, who has signed in unless the app is public.
 7. **Don't put secrets in the app.** That means no API keys in code, and `.env` files aren't uploaded anyway.
 8. **No outbound internet.** The build can download packages, but the running app can't call outside APIs or databases. Requests made by the viewer's browser, such as CDNs and fonts, aren't affected.
-9. **One instance, which sleeps when idle.** After 15 minutes without requests the app stops: it gets SIGTERM, then 10 seconds to exit. The next request starts it again, which takes a second or two.
+9. **One instance, which sleeps when idle.** After 15 minutes without requests or open WebSockets the app stops: it gets SIGTERM, then 10 seconds to exit. The next request starts it again, which takes a second or two.
 10. **Expired sign-ins reach `fetch` as a 401.** When a viewer's sign-in has expired, page loads are sent to sign in again, but `fetch` calls get `401` with `{"error":"not_signed_in"}`. Reload the page when you see it.
-11. **Use plain HTTP.** Websockets aren't supported, and requests time out after 5 minutes.
-12. **Log to stdout.** `nimbus logs` shows only what the app prints to stdout and stderr. Log one line per request (method, path, status, and the `X-Viewer-Email` viewer) and every error. Leave out query strings and request bodies.
+11. **WebSockets work.** Open them from the app's own pages, to the app's own URL: `new WebSocket(location.origin.replace("http", "ws") + "/ws")`. The handshake carries `X-Viewer-Email` like any other request. On a private app, sockets from other sites are refused; on a public app, any site can open one. With gunicorn, each open socket holds a thread, so set `--threads` to at least the number of sockets you expect.
+12. **Reconnect when a socket closes.** Redeploys and restarts close sockets, and so does losing access to the app. Retry after a short delay, then refetch anything the socket was keeping up to date. The browser doesn't say why a socket was refused, so if retries keep failing, `fetch` a path in the app: a 401 means the sign-in expired, so reload the page.
+13. **Other requests time out after 5 minutes.**
+14. **Log to stdout.** `nimbus logs` shows only what the app prints to stdout and stderr. Log one line per request (method, path, status, and the `X-Viewer-Email` viewer) and every error. Leave out query strings and request bodies.
 
 Two complete examples, both with SQLite, are in the CLI's repo at https://github.com/wceriale/nimbus-cli/tree/main/examples: `react-tasks` (a task board: React with a small Node server) and `python-dashboard` (a stats dashboard: Flask and gunicorn). Copy one as a starting point. For Node with SQLite on a `node:*-slim` image, install with `npm ci --ignore-scripts`: `better-sqlite3` ships prebuilt binaries, but without that flag its install step looks for Python and fails the build with `gyp ERR! find Python`.
 
@@ -128,7 +130,8 @@ The file has no other fields. A `share:` field is an error, because sharing is a
 ## Limits
 - **Upload:** 100 MB compressed, after the skips listed under Deploying.
 - **Deploy wait:** 10 minutes.
-- **Requests:** time out after 5 minutes. No websockets.
+- **Requests:** time out after 5 minutes.
+- **WebSockets:** at most 1,000 open per app. They have no time limit, but close when access ends or the app restarts.
 - **Runtime:** one instance per app, no outbound internet, and a stop after 15 idle minutes.
 - **Sharing:** inside the org only, for work projects. Groups aren't supported yet.
 - **Personal accounts:** at most 10 apps.

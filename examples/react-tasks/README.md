@@ -57,4 +57,4 @@ For your own copy, change `name` in `nimbus.yaml` first.
 
 ## Notes
 - The Dockerfile runs `npm ci --ignore-scripts`. better-sqlite3 ships prebuilt binaries, but without that flag npm runs node-gyp anyway, which needs Python that `node:24-slim` doesn't have.
-- Nimbus has no websockets, so the board doesn't update live. It reloads when the tab comes back into view.
+- The board doesn't update live, to keep the example small. It reloads when the tab comes back into view. For live updates, add a WebSocket: Nimbus supports them.

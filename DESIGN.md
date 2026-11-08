@@ -2,7 +2,7 @@
 
 `nimbus` is how agents use Nimbus. This file is both the CLI's spec and its feature tracker.
 
-Last updated 2026-11-06. Status: live. The API is `https://api.nimbostrat.dev`, with Google sign-in, and apps run at `https://<app>.<org>.nimbus-apps.dev`. v0.0.1 is released, but it still defaults to the old placeholder API; the next release defaults to the live one.
+Last updated 2026-11-08. Status: live. The API is `https://api.nimbostrat.dev`, with Google sign-in, and apps run at `https://<app>.<org>.nimbus-apps.dev`. v0.0.1 is released, but it still defaults to the old placeholder API; the next release defaults to the live one.
 
 **v0.1 scope:** hosting, Google sign-in, and sharing. Apps keep their data in a persistent `/data` directory (SQLite works well there) and have no outside data access yet. Connectors and `scopes` come in v0.2.
 
@@ -202,8 +202,8 @@ Without docs, this is what agents get wrong, so `nimbus docs` opens with it.
 4. Keep state in `$NIMBUS_DATA_DIR` (`/data` on Nimbus), a directory on a local disk. It survives restarts, idle stops, and redeploys, and SQLite (including WAL mode) works well there. Locally, default the directory to `./data`.
 5. Only `$NIMBUS_DATA_DIR` and `/tmp` are writable: the app runs as uid 10001 on a read-only filesystem, with 512 MB of memory. `HOME` is `/tmp` unless the image sets it. `/tmp` is in memory and cleared on restart.
 6. Nimbus checks readiness only by connecting to `$PORT`. It never sends HTTP requests of its own, so every request comes from a signed-in viewer.
-7. Each app runs as a single instance. It sleeps after 15 minutes without requests (SIGTERM, then 10 seconds to exit), and the next request wakes it in a second or two. When a viewer's sign-in has expired, page loads are sent to sign in, but `fetch` calls get `401 {"error":"not_signed_in"}`, so the app can reload the page.
-8. Use plain HTTP. There are no websockets, and requests time out after 5 minutes.
+7. Each app runs as a single instance. It sleeps after 15 minutes without requests or open WebSockets (SIGTERM, then 10 seconds to exit), and the next request wakes it in a second or two. When a viewer's sign-in has expired, page loads are sent to sign in, but `fetch` calls get `401 {"error":"not_signed_in"}`, so the app can reload the page.
+8. WebSockets work when opened from the app's own pages, and should reconnect when they close. Other requests time out after 5 minutes.
 9. The running app has no outbound internet. The build does, so `npm install` and `pip install` work, but the app can't call outside APIs. Requests the viewer's browser makes (CDNs, fonts) aren't affected.
 
 ## Docs for agents
@@ -224,7 +224,7 @@ Outline of `docs/agent-guide.md`:
 4. The app contract
 5. Command reference (generated)
 6. Errors and what to do about each
-7. Limits: upload size, command timeouts, no websockets, sharing only inside the org
+7. Limits: upload size, command timeouts, open WebSockets, sharing only inside the org
 
 **The agent usability eval** checks whether the docs work, and it gates the v0.1 release:
 - **Fixture apps (3):** a Flask app with no Dockerfile (the agent has to write one), a Next.js app, and a Dockerfile app hardcoded to port 5000.

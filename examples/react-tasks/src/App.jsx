@@ -24,7 +24,7 @@ export default function App() {
   useEffect(() => {
     api.me().then(({ email }) => setMe(email), () => {});
     load();
-    // Nimbus has no websockets, so pick up teammates' changes whenever the tab comes back into view.
+    // Pick up teammates' changes whenever the tab comes back into view.
     const onVisible = () => document.visibilityState === "visible" && load();
     document.addEventListener("visibilitychange", onVisible);
     return () => document.removeEventListener("visibilitychange", onVisible);
