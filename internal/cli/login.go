@@ -79,14 +79,7 @@ func (a *App) login(ctx context.Context, wait bool) (any, error) {
 	store := a.store()
 	creds := store.LoadCredentials()
 	pending := store.LoadPending()
-	var credsURL, pendingURL string
-	if creds != nil {
-		credsURL = creds.APIURL
-	}
-	if pending != nil {
-		pendingURL = pending.APIURL
-	}
-	base, err := a.apiURL(credsURL, pendingURL)
+	base, err := a.apiURL()
 	if err != nil {
 		return nil, err
 	}

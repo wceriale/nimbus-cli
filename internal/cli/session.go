@@ -22,12 +22,13 @@ type session struct {
 
 func (a *App) store() config.Store { return config.Store{Dir: a.ConfigDir} }
 
-// apiURL picks the API to talk to: NIMBUS_API_URL, else the first non-empty
-// remembered URL (from a login), else the built-in default.
-func (a *App) apiURL(remembered ...string) (string, error) {
+// apiURL picks the API to talk to: NIMBUS_API_URL, else the built-in default.
+// A stored login never picks it, so moving the default can't strand anyone on
+// the old API: a login for another API reads as not_logged_in.
+func (a *App) apiURL() (string, error) {
 	raw := a.Getenv("NIMBUS_API_URL")
 	if raw == "" {
-		raw = firstNonEmpty(append(remembered, DefaultAPIURL)...)
+		raw = DefaultAPIURL
 	}
 	if raw == "" {
 		return "", output.Errorf("api_url_not_set",
@@ -54,11 +55,7 @@ func (a *App) client(baseURL string) *api.Client {
 func (a *App) session() (*session, error) {
 	store := a.store()
 	creds := store.LoadCredentials()
-	var credsURL string
-	if creds != nil {
-		credsURL = creds.APIURL
-	}
-	base, err := a.apiURL(credsURL)
+	base, err := a.apiURL()
 	if err != nil {
 		return nil, err
 	}

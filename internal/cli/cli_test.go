@@ -277,6 +277,25 @@ func TestAPIURL(t *testing.T) {
 	h.fail("invalid_api_url", t.TempDir(), "login")
 }
 
+// A login saved for another API, such as one from before the default moved,
+// doesn't pick the API: the CLI uses the default and logs in again there.
+func TestLoginForOtherAPIIsIgnored(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+
+	moved := httptest.NewServer(fakeapi.New("you@acme.com").Handler())
+	t.Cleanup(moved.Close)
+	delete(h.env, "NIMBUS_API_URL")
+	saved := DefaultAPIURL
+	DefaultAPIURL = moved.URL
+	t.Cleanup(func() { DefaultAPIURL = saved })
+
+	h.fail("not_logged_in", t.TempDir(), "whoami")
+	if d := h.ok(t.TempDir(), "login"); d["status"] != "pending" || d["api_url"] != moved.URL {
+		t.Errorf("login = %v, want a new pending login at %s", d, moved.URL)
+	}
+}
+
 func TestTokenRefresh(t *testing.T) {
 	h := newHarness(t)
 	h.login()

@@ -100,7 +100,7 @@ nimbus docs                the agent guide, printed as markdown
 - **Global flags:** `--json`, `--app <name>` (defaults to `name` in `./nimbus.yaml`), `--help`, `--version`.
 - **Environment variables:** `NIMBUS_TOKEN` overrides the stored login. `NIMBUS_API_URL` sets the API URL. The built-in default is `https://api.nimby.run` (`DefaultAPIURL` in `internal/cli/app.go`, or set it with `-ldflags`).
 
-  Credentials are only ever sent to the API that issued them.
+  Credentials are only ever sent to the API that issued them. A login never picks the API: the CLI uses `NIMBUS_API_URL` or the default, and a login for a different API reads as `not_logged_in`.
 
 ### How the core commands behave
 **`nimbus login`** runs an RFC 8628 device flow against the Nimbus control plane, which handles the company sign-in (Google in v0.1; Okta later). The same flow works for local, headless, and cloud agents.
@@ -300,6 +300,7 @@ Layout:
 | 2026-11-05 | Public apps are a flag on `share`/`unshare` (`--public`), not a new command | Matches the planned `--org`, keeps the command list short, and making an app public goes through the same all-or-nothing `PATCH`. |
 | 2026-11-06 | Personal or work is asked through an `ask_user` error on deploy, and saved as `account` in `nimbus.yaml` | A prompt would hang an agent, and docs alone get skipped. An error the agent can't get past, whose message says to ask, makes the user decide. Saving it means one question per project, and checking it against the login keeps personal projects out of company orgs. |
 | 2026-11-09 | The default API is `https://api.nimby.run`, replacing `api.nimbostrat.dev` | The main domain moved to `nimby.run`. A saved login only goes to the API that issued it, so after upgrading, the CLI returns `not_logged_in` once and the user logs in again. |
+| 2026-11-09 | A saved login no longer picks the API: it's `NIMBUS_API_URL` or the default | Remembering the login's API dates from when the default was a placeholder. After the move to `nimby.run`, it kept older logins on the dead `api.nimbostrat.dev`. Pointing the CLI at another server now means keeping `NIMBUS_API_URL` set. |
 
 ## Open questions
 - "Nimbus" is a crowded name: Mozilla's experimentation platform, Status's Ethereum client, and Nimbus Note all use it. It's fine as a working name, but check trademarks and domain availability before launch.
