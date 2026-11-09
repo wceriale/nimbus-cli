@@ -2,7 +2,7 @@
 
 `nimbus` takes a web app your agent already wrote and runs it at a URL. A work project runs privately behind your company's sign-in: you share it with coworkers by email, and the app always knows who's viewing it, so it never needs its own login. A personal project runs under your personal Google account, such as Gmail, and is public.
 
-> **Status: early access (v0.0.x).** Nimbus is live at `api.nimbostrat.dev`. People sign in with Google. Personal Google accounts, such as Gmail, host personal projects, which are always public. Company Workspace accounts host private work projects, and the company's domain has to be enabled first. Progress and spec: [DESIGN.md](DESIGN.md).
+> **Status: early access (v0.0.x).** Nimbus is live at `api.nimby.run`. People sign in with Google. Personal Google accounts, such as Gmail, host personal projects, which are always public. Company Workspace accounts host private work projects, and the company's domain has to be enabled first. Progress and spec: [DESIGN.md](DESIGN.md).
 
 ## For agents
 Install:

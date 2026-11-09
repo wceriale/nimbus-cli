@@ -46,7 +46,7 @@ func (a *App) whoamiCmd() *cobra.Command {
 		Use:   "whoami",
 		Short: "Show who you're logged in as; use it to check the login before other commands",
 		Example: `  $ nimbus whoami
-  {"ok":true,"data":{"email":"you@acme.com","org":"acme","org_name":"Acme","personal":false,"idp":"google","api_url":"https://api.nimbostrat.dev","auth":"login","cli_version":"v0.1.0"}}`,
+  {"ok":true,"data":{"email":"you@acme.com","org":"acme","org_name":"Acme","personal":false,"idp":"google","api_url":"https://api.nimby.run","auth":"login","cli_version":"v0.1.0"}}`,
 		Args: noArgs,
 		RunE: a.run(func(ctx context.Context, _ []string) (any, error) {
 			sess, err := a.session()

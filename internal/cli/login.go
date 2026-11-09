@@ -34,11 +34,11 @@ such as Gmail, which hosts personal projects. A work Google account from a
 company on nimbus hosts work projects.`,
 		Example: `  # Agent, step 1: get a URL for the user
   $ nimbus login
-  {"ok":true,"data":{"status":"pending","api_url":"https://api.nimbostrat.dev","verification_url":"https://auth.nimbostrat.dev/device?code=WDJB-MJHT","user_code":"WDJB-MJHT","expires_in":600,"browser_opened":false,"next":"Show the user verification_url ..."}}
+  {"ok":true,"data":{"status":"pending","api_url":"https://api.nimby.run","verification_url":"https://auth.nimby.run/device?code=WDJB-MJHT","user_code":"WDJB-MJHT","expires_in":600,"browser_opened":false,"next":"Show the user verification_url ..."}}
 
   # Agent, step 2: after the user approves
   $ nimbus login
-  {"ok":true,"data":{"status":"logged_in","email":"you@acme.com","org":"acme","personal":false,"api_url":"https://api.nimbostrat.dev","auth":"login"}}`,
+  {"ok":true,"data":{"status":"logged_in","email":"you@acme.com","org":"acme","personal":false,"api_url":"https://api.nimby.run","auth":"login"}}`,
 		Args: noArgs,
 		RunE: a.run(func(ctx context.Context, _ []string) (any, error) {
 			return a.login(ctx, wait || a.StdoutIsTTY)
@@ -251,7 +251,7 @@ The local login is deleted even if the server can't be reached ("revoked":
 false). Running it while logged out succeeds and does nothing. It doesn't
 affect NIMBUS_TOKEN.`,
 		Example: `  $ nimbus logout
-  {"ok":true,"data":{"status":"logged_out","api_url":"https://api.nimbostrat.dev","email":"you@acme.com","revoked":true}}`,
+  {"ok":true,"data":{"status":"logged_out","api_url":"https://api.nimby.run","email":"you@acme.com","revoked":true}}`,
 		Args: noArgs,
 		RunE: a.run(func(ctx context.Context, _ []string) (any, error) {
 			return a.logout(ctx)

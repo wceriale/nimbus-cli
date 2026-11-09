@@ -2,7 +2,7 @@
 
 `nimbus` is how agents use Nimbus. This file is both the CLI's spec and its feature tracker.
 
-Last updated 2026-11-08. Status: live. The API is `https://api.nimbostrat.dev`, with Google sign-in, and apps run at `https://<app>.<org>.nimbus-apps.dev`. v0.0.1 is released, but it still defaults to the old placeholder API; the next release defaults to the live one.
+Last updated 2026-11-09. Status: live. The API is `https://api.nimby.run`, with Google sign-in, and apps run at `https://<app>.<org>.nimbus-apps.dev`. The API is moving there from `https://api.nimbostrat.dev`, which released CLIs (through v0.0.5) still default to; the next release defaults to `api.nimby.run`.
 
 **v0.1 scope:** hosting, Google sign-in, and sharing. Apps keep their data in a persistent `/data` directory (SQLite works well there) and have no outside data access yet. Connectors and `scopes` come in v0.2.
 
@@ -98,7 +98,7 @@ nimbus list                apps you own
 nimbus docs                the agent guide, printed as markdown
 ```
 - **Global flags:** `--json`, `--app <name>` (defaults to `name` in `./nimbus.yaml`), `--help`, `--version`.
-- **Environment variables:** `NIMBUS_TOKEN` overrides the stored login. `NIMBUS_API_URL` sets the API URL. The built-in default is `https://api.nimbostrat.dev` (`DefaultAPIURL` in `internal/cli/app.go`, or set it with `-ldflags`).
+- **Environment variables:** `NIMBUS_TOKEN` overrides the stored login. `NIMBUS_API_URL` sets the API URL. The built-in default is `https://api.nimby.run` (`DefaultAPIURL` in `internal/cli/app.go`, or set it with `-ldflags`).
 
   Credentials are only ever sent to the API that issued them.
 
@@ -107,7 +107,7 @@ nimbus docs                the agent guide, printed as markdown
 - **In a terminal:** it prints a URL and a code, opens the browser, and waits.
 - **Not in a terminal (agents):** it returns at once:
   ```json
-  {"ok":true,"data":{"status":"pending","verification_url":"https://auth.nimbostrat.dev/device?code=WDJB-MJHT","user_code":"WDJB-MJHT","expires_in":600}}
+  {"ok":true,"data":{"status":"pending","verification_url":"https://auth.nimby.run/device?code=WDJB-MJHT","user_code":"WDJB-MJHT","expires_in":600}}
   ```
   The agent shows the user the URL and then runs `nimbus login` again. That second call returns `{"status":"logged_in","email":"…","org":"…"}` once the user approves, or the same pending code if they haven't yet. If the user is already logged in, it returns `logged_in` straight away.
 - **Why it doesn't block for agents:** an agent can't show the user a URL while its own command is still running.
@@ -299,6 +299,7 @@ Layout:
 | 2026-10-28 | The default API is `https://api.nimbostrat.dev`, and `api_url_placeholder` is gone | Real domains exist: `nimbostrat.dev` for `api` and `auth`, `nimbus-apps.dev` for apps. v0.0.1 keeps the placeholder until the next release. |
 | 2026-11-05 | Public apps are a flag on `share`/`unshare` (`--public`), not a new command | Matches the planned `--org`, keeps the command list short, and making an app public goes through the same all-or-nothing `PATCH`. |
 | 2026-11-06 | Personal or work is asked through an `ask_user` error on deploy, and saved as `account` in `nimbus.yaml` | A prompt would hang an agent, and docs alone get skipped. An error the agent can't get past, whose message says to ask, makes the user decide. Saving it means one question per project, and checking it against the login keeps personal projects out of company orgs. |
+| 2026-11-09 | The default API is `https://api.nimby.run`, replacing `api.nimbostrat.dev` | The main domain moved to `nimby.run`. A saved login only goes to the API that issued it, so after upgrading, the CLI returns `not_logged_in` once and the user logs in again. |
 
 ## Open questions
 - "Nimbus" is a crowded name: Mozilla's experimentation platform, Status's Ethereum client, and Nimbus Note all use it. It's fine as a working name, but check trademarks and domain availability before launch.

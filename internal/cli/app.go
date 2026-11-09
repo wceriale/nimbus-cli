@@ -26,7 +26,7 @@ var Version = "dev"
 
 // DefaultAPIURL is the hosted Nimbus API. NIMBUS_API_URL overrides it, and a
 // build can change it with -ldflags "-X …/internal/cli.DefaultAPIURL=https://…".
-var DefaultAPIURL = "https://api.nimbostrat.dev"
+var DefaultAPIURL = "https://api.nimby.run"
 
 // App is one run of the CLI. Everything it touches outside the process is a
 // field, so tests can swap it.
