@@ -152,11 +152,12 @@ func TestLoginIsTwoStepForAgents(t *testing.T) {
 	}
 
 	h.fake.ApproveAll()
-	if _, ok := d["personal"]; ok {
-		t.Errorf("pending login reports personal: %v", d)
+	if _, ok := d["org"]; ok {
+		t.Errorf("pending login reports an org: %v", d)
 	}
+	// No org yet: the first deploy creates it.
 	d = h.ok(dir, "login")
-	if d["status"] != "logged_in" || d["email"] != "you@acme.com" || d["org"] != "acme" || d["personal"] != false {
+	if _, ok := d["org"]; d["status"] != "logged_in" || d["email"] != "you@acme.com" || d["domain"] != "acme.com" || ok {
 		t.Fatalf("login after approval = %v", d)
 	}
 	fi, err := os.Stat(filepath.Join(h.cfg, "credentials.json"))
@@ -166,8 +167,25 @@ func TestLoginIsTwoStepForAgents(t *testing.T) {
 	if d := h.ok(dir, "login"); d["status"] != "logged_in" {
 		t.Errorf("login while logged in = %v", d)
 	}
-	if d := h.ok(dir, "whoami"); d["email"] != "you@acme.com" || d["auth"] != "login" || d["personal"] != false {
+	d = h.ok(dir, "whoami")
+	if d["email"] != "you@acme.com" || d["auth"] != "login" || d["org"] != "" || !strings.Contains(d["next"].(string), "creates the acme.com workspace") {
 		t.Errorf("whoami = %v", d)
+	}
+}
+
+// A work domain that isn't enabled during private testing can't log in.
+func TestLoginDomainNotEnabled(t *testing.T) {
+	h := newHarness(t)
+	h.fake.DomainNotEnabled = true
+	h.ok(t.TempDir(), "login")
+	h.fake.ApproveAll()
+	e := h.fail("domain_not_enabled", t.TempDir(), "login")
+	if !strings.Contains(e.Message, "private testing") || !strings.Contains(e.Hint, "enabled") {
+		t.Errorf("domain_not_enabled = %+v", e)
+	}
+	// The code is gone: the next login starts over.
+	if d := h.ok(t.TempDir(), "login"); d["status"] != "pending" {
+		t.Errorf("login after refusal = %v", d)
 	}
 }
 
@@ -316,8 +334,10 @@ func TestDeploy(t *testing.T) {
 		"node_modules/x/index.js": "dep",
 	})
 
-	d := h.ok(dir, "deploy", "--work")
-	if d["app"] != "renewal-desk" || d["account"] != "work" || d["state"] != "live" || d["version"] != 1.0 || d["manifest_created"] != true {
+	d := h.ok(dir, "deploy")
+	if d["app"] != "renewal-desk" || d["org"] != "acme.com" || d["org_kind"] != "work" || d["state"] != "live" || d["version"] != 1.0 ||
+		d["manifest_created"] != true || d["visibility"] != "private" || d["shares_used"] != 0.0 || d["shares_limit"] != 5.0 ||
+		d["apps_used"] != 1.0 || d["apps_limit"] != 5.0 {
 		t.Fatalf("deploy = %v", d)
 	}
 	if !strings.Contains(d["next"].(string), "nimbus share") {
@@ -329,13 +349,15 @@ func TestDeploy(t *testing.T) {
 	if got, want := h.fake.UploadedFiles("renewal-desk"), []string{".gitignore", "app.py", "nimbus.yaml"}; !slices.Equal(got, want) {
 		t.Errorf("uploaded %v, want %v", got, want)
 	}
-	if b, err := os.ReadFile(filepath.Join(dir, "nimbus.yaml")); err != nil || !strings.Contains(string(b), "\naccount: work\n") {
-		t.Errorf("nimbus.yaml = %q, %v; want it to say account: work", b, err)
+	if b, err := os.ReadFile(filepath.Join(dir, "nimbus.yaml")); err != nil || !strings.HasSuffix(string(b), "\nname: renewal-desk\norg: acme.com\n") {
+		t.Errorf("nimbus.yaml = %q, %v; want it to pin org: acme.com", b, err)
+	}
+	if d := h.ok(dir, "whoami"); d["org"] != "acme.com" || d["org_kind"] != "work" || d["role"] != "owner" || d["apps_used"] != 1.0 {
+		t.Errorf("whoami after the first deploy = %v", d)
 	}
 
-	// The answer is saved, so redeploys don't need the flag.
 	again := h.ok(dir, "deploy")
-	if again["unchanged"] != true || again["version"] != 1.0 || again["manifest_created"] != false || again["account"] != "work" {
+	if again["unchanged"] != true || again["version"] != 1.0 || again["manifest_created"] != false || again["org"] != "acme.com" {
 		t.Errorf("redeploy of the same source = %v, want unchanged version 1", again)
 	}
 
@@ -356,7 +378,7 @@ func TestDeployFailureCarriesLogTail(t *testing.T) {
 		LogTail: []string{"Running on http://127.0.0.1:5000"},
 	})
 	dir := appDir(t, "planner", map[string]string{"app.py": "x"})
-	e := h.fail("start_failed", dir, "deploy", "--work")
+	e := h.fail("start_failed", dir, "deploy")
 	if len(e.LogTail) != 1 || !strings.Contains(e.Hint, "$PORT") || !strings.Contains(e.Hint, "nimbus logs planner --build") {
 		t.Errorf("failure = %+v", e)
 	}
@@ -374,7 +396,7 @@ func TestDeployNoWaitThenStatus(t *testing.T) {
 	h := newHarness(t)
 	h.login()
 	dir := appDir(t, "planner", map[string]string{"app.py": "x"})
-	d := h.ok(dir, "deploy", "--work", "--no-wait")
+	d := h.ok(dir, "deploy", "--no-wait")
 	if d["state"] != "queued" || !strings.Contains(d["next"].(string), "nimbus status") {
 		t.Fatalf("deploy --no-wait = %v", d)
 	}
@@ -393,128 +415,122 @@ func TestDeployNameRules(t *testing.T) {
 	h := newHarness(t)
 	h.login()
 	h.fake.AddApp("taken", "someone@acme.com")
-	h.fail("name_taken", appDir(t, "taken", map[string]string{"app.py": "x"}), "deploy", "--work")
-	h.fail("invalid_name", appDir(t, "x", map[string]string{"app.py": "x"}), "deploy", "--work")
-	if d := h.ok(appDir(t, "x", map[string]string{"app.py": "x"}), "deploy", "--work", "--app", "my-tool"); d["app"] != "my-tool" {
+	h.fail("name_taken", appDir(t, "taken", map[string]string{"app.py": "x"}), "deploy")
+	h.fail("invalid_name", appDir(t, "x", map[string]string{"app.py": "x"}), "deploy")
+	if d := h.ok(appDir(t, "x", map[string]string{"app.py": "x"}), "deploy", "--app", "my-tool"); d["app"] != "my-tool" {
 		t.Errorf("deploy --app = %v", d)
 	}
 	h.fail("invalid_manifest", appDir(t, "shared", map[string]string{"nimbus.yaml": "name: shared\nshare: [a@acme.com]\n"}), "deploy")
 }
 
-// Until nimbus.yaml says whether a project is personal or work, deploy stops
-// and tells the agent to ask the user. It does so before the login check and
-// before writing anything.
-func TestDeployAsksPersonalOrWork(t *testing.T) {
+// A nimbus.yaml without org: gets one on its next deploy, keeping the rest
+// of the file, apart from a line older CLIs wrote, which goes.
+func TestDeployPinsOrg(t *testing.T) {
 	h := newHarness(t)
-	dir := appDir(t, "planner", map[string]string{"app.py": "x"})
-	r := h.run(dir, "deploy")
-	if r.code != 2 || r.Error == nil || r.Error.Code != "ask_user" ||
-		!strings.Contains(r.Error.Message, "Ask the user") || !strings.Contains(r.Error.Hint, "--personal") || !strings.Contains(r.Error.Hint, "--work") {
-		t.Fatalf("first deploy = exit %d, %+v; want exit 2 with ask_user", r.code, r.Error)
-	}
-	if _, err := os.Stat(filepath.Join(dir, "nimbus.yaml")); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("ask_user wrote nimbus.yaml: %v", err)
-	}
-
-	// A nimbus.yaml from before accounts existed asks once too.
-	before := "# Planner\nname: planner\nport: 8080\n"
-	old := appDir(t, "old", map[string]string{"app.py": "x", "nimbus.yaml": before})
-	if r := h.run(old, "deploy"); r.code != 2 || r.Error == nil || r.Error.Code != "ask_user" {
-		t.Errorf("deploy of an old manifest = exit %d, %+v; want ask_user", r.code, r.Error)
-	}
 	h.login()
-	if d := h.ok(old, "deploy", "--work"); d["app"] != "planner" || d["account"] != "work" || d["manifest_created"] != false {
-		t.Errorf("deploy --work of an old manifest = %v", d)
+	legacy := "acc" + "ount: work\n" // what older CLIs wrote
+	old := appDir(t, "old", map[string]string{"app.py": "x", "nimbus.yaml": "# Planner\nname: planner\n" + legacy + "port: 8080\n"})
+	if d := h.ok(old, "deploy"); d["app"] != "planner" || d["org"] != "acme.com" || d["manifest_created"] != false ||
+		!strings.Contains(d["next"].(string), "Commit nimbus.yaml") {
+		t.Errorf("deploy of an old manifest = %v", d)
 	}
-	if b, _ := os.ReadFile(filepath.Join(old, "nimbus.yaml")); string(b) != before+"account: work\n" {
-		t.Errorf("nimbus.yaml = %q, want the old content plus account: work", b)
+	if b, _ := os.ReadFile(filepath.Join(old, "nimbus.yaml")); string(b) != "# Planner\nname: planner\nport: 8080\norg: acme.com\n" {
+		t.Errorf("nimbus.yaml = %q, want the old content with org: acme.com instead of the old line", b)
 	}
-	if d := h.ok(old, "deploy"); d["unchanged"] != true || d["account"] != "work" {
-		t.Errorf("redeploy without a flag = %v", d)
+	if d := h.ok(old, "deploy"); d["unchanged"] != true || d["org"] != "acme.com" {
+		t.Errorf("redeploy = %v", d)
 	}
-	h.ok(old, "deploy", "--work")
-	if e := h.fail("account_conflict", old, "deploy", "--personal"); !strings.Contains(e.Hint, "nimbus.yaml") {
-		t.Errorf("account_conflict hint = %q", e.Hint)
-	}
+	h.fail("invalid_manifest", appDir(t, "bad", map[string]string{"nimbus.yaml": "name: bad-org\norg: not a domain\n"}), "deploy")
 }
 
-// The project's account has to match the login: a personal project can't go
-// into a company's org, and a work project can't go under a personal account.
+// A project pinned to another org than the login's fails with the server's
+// wrong_account, before anything is written or uploaded.
 func TestDeployWrongAccount(t *testing.T) {
 	h := newHarness(t)
 	h.login()
-	dir := appDir(t, "planner", map[string]string{"app.py": "x"})
-	e := h.fail("wrong_account", dir, "deploy", "--personal")
-	if !strings.Contains(e.Message, "you@acme.com") || !strings.Contains(e.Hint, "nimbus logout") || !strings.Contains(e.Hint, "personal Google account") {
-		t.Errorf("personal project, work login: %+v", e)
+	manifest := "name: planner\norg: u-someone\n"
+	dir := appDir(t, "planner", map[string]string{"app.py": "x", "nimbus.yaml": manifest})
+	e := h.fail("wrong_account", dir, "deploy")
+	if e.Message != "This app belongs to u-someone. You're signed in as you@acme.com (acme.com)." ||
+		e.Hint != "Run `nimbus login` to switch accounts, or remove `org:` from nimbus.yaml to deploy a separate copy here." ||
+		e.Details["app_org"] != "u-someone" || e.Details["account_org"] != "acme.com" {
+		t.Errorf("wrong_account = %+v", e)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "nimbus.yaml")); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("wrong_account wrote nimbus.yaml: %v", err)
+	if b, _ := os.ReadFile(filepath.Join(dir, "nimbus.yaml")); string(b) != manifest {
+		t.Errorf("nimbus.yaml = %q, want it untouched", b)
+	}
+	if got := h.fake.UploadedFiles("planner"); got != nil {
+		t.Errorf("uploaded %v", got)
 	}
 
+	// A personal account with no space yet matches no pin.
 	h = newHarnessFor(t, "you@gmail.com")
 	h.login()
-	e = h.fail("wrong_account", dir, "deploy", "--work")
-	if !strings.Contains(e.Message, "you@gmail.com") || !strings.Contains(e.Hint, "work Google account") || !strings.Contains(e.Hint, "personal project instead") {
-		t.Errorf("work project, personal login: %+v", e)
-	}
-	if _, err := os.Stat(filepath.Join(dir, "nimbus.yaml")); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("wrong_account wrote nimbus.yaml: %v", err)
+	dir = appDir(t, "planner", map[string]string{"app.py": "x", "nimbus.yaml": "name: planner\norg: acme.com\n"})
+	if e := h.fail("wrong_account", dir, "deploy"); e.Message != "This app belongs to acme.com. You're signed in as you@gmail.com (personal)." {
+		t.Errorf("wrong_account = %+v", e)
 	}
 }
 
 func TestPersonalProject(t *testing.T) {
 	h := newHarnessFor(t, "you@gmail.com")
-	h.ok(t.TempDir(), "login")
-	h.fake.ApproveAll()
-	if d := h.ok(t.TempDir(), "login"); d["status"] != "logged_in" || d["personal"] != true || d["org"] != "u-you" {
-		t.Fatalf("personal login = %v", d)
-	}
-	if d := h.ok(t.TempDir(), "whoami"); d["personal"] != true || d["email"] != "you@gmail.com" {
-		t.Errorf("whoami = %v", d)
+	h.login()
+	if d := h.ok(t.TempDir(), "whoami"); d["org"] != "" || d["domain"] != "" || !strings.Contains(d["next"].(string), "creates your personal space") {
+		t.Errorf("whoami before deploying = %v", d)
 	}
 
 	dir := appDir(t, "planner", map[string]string{"app.py": "x"})
-	d := h.ok(dir, "deploy", "--personal")
-	if d["account"] != "personal" || d["public"] != true || !strings.Contains(d["url"].(string), ".u-you.") {
+	d := h.ok(dir, "deploy")
+	if d["org"] != "u-you" || d["org_kind"] != "personal" || d["public"] == true || d["visibility"] != "private" ||
+		!strings.Contains(d["url"].(string), ".u-you.") || !strings.Contains(d["next"].(string), "nimbus share") {
 		t.Fatalf("personal deploy = %v", d)
 	}
-	if next, _ := d["next"].(string); !strings.Contains(next, "public") || !strings.Contains(next, "X-Viewer-Email") || strings.Contains(next, "nimbus share") {
-		t.Errorf("personal deploy next = %q", next)
-	}
-	if b, _ := os.ReadFile(filepath.Join(dir, "nimbus.yaml")); !strings.Contains(string(b), "\naccount: personal\n") {
+	if b, _ := os.ReadFile(filepath.Join(dir, "nimbus.yaml")); !strings.HasSuffix(string(b), "\norg: u-you\n") {
 		t.Errorf("nimbus.yaml = %q", b)
 	}
-	if st := h.ok(dir, "status"); st["public"] != true || st["next"] != nil {
-		t.Errorf("status = %v", st)
+	if d := h.ok(t.TempDir(), "login"); d["org"] != "u-you" || d["org_kind"] != "personal" {
+		t.Errorf("login after deploying = %v", d)
 	}
 
-	// Personal apps are always public: no sharing by email, no going private.
-	h.fail("personal_app", dir, "share", "lena@gmail.com")
-	h.fail("personal_app", dir, "unshare", "--public")
-	if d := h.ok(dir, "share", "--public"); d["public"] != true {
+	// Personal apps share with any Google account, 5 people on the free plan.
+	d = h.ok(dir, "share", "a@gmail.com", "b@outlook.com", "c@acme.com", "d@gmail.com", "e@gmail.com")
+	if d["visibility"] != "shared" || d["shares_used"] != 5.0 || d["shares_limit"] != 5.0 {
+		t.Errorf("share = %v", d)
+	}
+	if e := h.fail("share_limit", dir, "share", "f@gmail.com"); e.Details["shares_used"] != 5.0 {
+		t.Errorf("share_limit = %+v", e)
+	}
+	if d := h.ok(dir, "share", "--public"); d["public"] != true || d["visibility"] != "public" || d["shares_used"] != 5.0 {
 		t.Errorf("share --public = %v", d)
 	}
+	if d := h.ok(dir, "unshare", "--public"); d["public"] != false || d["visibility"] != "shared" {
+		t.Errorf("unshare --public = %v", d)
+	}
+	h.fail("org_is_personal", t.TempDir(), "org", "external-sharing", "on")
 
-	for i := range 9 {
+	// 5 apps per org, public ones included.
+	for i := range 4 {
 		h.fake.AddApp(fmt.Sprintf("app-%d", i), "you@gmail.com")
 	}
-	h.fail("app_limit", appDir(t, "eleventh", map[string]string{"app.py": "x"}), "deploy", "--personal")
+	e := h.fail("app_limit", appDir(t, "sixth", map[string]string{"app.py": "x"}), "deploy")
+	if e.Message != "This workspace has 5 apps, the free limit. Delete one with `nimbus destroy <app>` or upgrade." || e.Details["apps_used"] != 5.0 {
+		t.Errorf("app_limit = %+v", e)
+	}
 }
 
 func TestShare(t *testing.T) {
 	h := newHarness(t)
 	h.login()
 	dir := appDir(t, "planner", map[string]string{"app.py": "x"})
-	h.ok(dir, "deploy", "--work")
+	h.ok(dir, "deploy")
 
 	d := h.ok(dir, "share", "Lena@Acme.com", "priya@acme.com")
-	if got := d["shared_with"].([]any); len(got) != 3 || !slices.Contains(got, any("lena@acme.com")) {
+	if got := d["shared_with"].([]any); len(got) != 3 || !slices.Contains(got, any("lena@acme.com")) || d["shares_used"] != 2.0 || d["visibility"] != "shared" {
 		t.Errorf("share = %v", d)
 	}
-	e := h.fail("share_outside_org", dir, "share", "x@other.com")
-	if !slices.Contains(e.Details["emails"].([]any), any("x@other.com")) {
-		t.Errorf("share_outside_org details = %v", e.Details)
+	e := h.fail("external_sharing_disabled", dir, "share", "x@other.com")
+	if !slices.Contains(e.Details["emails"].([]any), any("x@other.com")) || !strings.Contains(e.Hint, "nimbus org external-sharing on") {
+		t.Errorf("external_sharing_disabled = %+v", e)
 	}
 	h.fail("invalid_email", dir, "share", "lena")
 	d = h.ok(dir, "unshare", "lena@acme.com")
@@ -544,6 +560,33 @@ func TestShare(t *testing.T) {
 	}
 }
 
+// The workspace owner turns external sharing on to share outside the domain;
+// turning it off removes those shares.
+func TestExternalSharing(t *testing.T) {
+	h := newHarness(t)
+	h.login()
+	if e := h.fail("no_org", t.TempDir(), "org", "external-sharing", "on"); !strings.Contains(e.Hint, "nimbus deploy") {
+		t.Errorf("no_org = %+v", e)
+	}
+	dir := appDir(t, "planner", map[string]string{"app.py": "x"})
+	h.ok(dir, "deploy")
+	h.fail("external_sharing_disabled", dir, "share", "friend@gmail.com")
+
+	if d := h.ok(t.TempDir(), "org", "external-sharing", "on"); d["org"] != "acme.com" || d["external_sharing"] != true || d["removed_shares"] != 0.0 {
+		t.Errorf("external-sharing on = %v", d)
+	}
+	h.ok(dir, "share", "friend@gmail.com", "lena@acme.com")
+	if d := h.ok(t.TempDir(), "org", "external-sharing", "off"); d["external_sharing"] != false || d["removed_shares"] != 1.0 {
+		t.Errorf("external-sharing off = %v", d)
+	}
+	if st := h.ok(dir, "status"); fmt.Sprint(st["shared_with"]) != "[you@acme.com lena@acme.com]" {
+		t.Errorf("shares after off = %v", st["shared_with"])
+	}
+
+	h.fake.Member = true
+	h.fail("not_org_owner", t.TempDir(), "org", "external-sharing", "on")
+}
+
 func TestAppResolution(t *testing.T) {
 	h := newHarness(t)
 	h.login()
@@ -551,8 +594,8 @@ func TestAppResolution(t *testing.T) {
 	h.fail("app_not_specified", empty, "status")
 	h.fail("app_not_found", empty, "status", "nope")
 	dir := appDir(t, "planner", map[string]string{"app.py": "x"})
-	h.ok(dir, "deploy", "--work")
-	if d := h.ok(empty, "status", "--app", "planner"); d["name"] != "planner" {
+	h.ok(dir, "deploy")
+	if d := h.ok(empty, "status", "--app", "planner"); d["name"] != "planner" || d["org"] != "acme.com" || d["visibility"] != "private" {
 		t.Errorf("status --app = %v", d)
 	}
 	if d := h.ok(empty, "list"); len(d["apps"].([]any)) != 1 {
@@ -566,7 +609,7 @@ func TestAppResolution(t *testing.T) {
 func TestUsageErrorsExit2(t *testing.T) {
 	h := newHarness(t)
 	for _, args := range [][]string{{"share"}, {"unshare"}, {"share", "--public=false"}, {"frobnicate"}, {"deploy", "--bogus"},
-		{"deploy", "--personal", "--work"}, {"logs", "--limit", "0"}} {
+		{"deploy", "--work"}, {"logs", "--limit", "0"}, {"org"}, {"org", "external-sharing"}, {"org", "external-sharing", "maybe"}} {
 		r := h.run(t.TempDir(), args...)
 		if r.code != 2 || r.Error == nil || r.Error.Code != "usage" || r.Error.Hint == "" {
 			t.Errorf("nimbus %v: exit %d, error %+v; want exit 2 with usage", args, r.code, r.Error)
@@ -598,9 +641,28 @@ func TestDocsPrintsMarkdown(t *testing.T) {
 		t.Fatalf("docs exit %d", code)
 	}
 	md := stdout.String()
-	for _, want := range []string{"# Nimbus agent guide", "X-Viewer-Email", "## Command reference", "### `nimbus deploy [dir]`", "--no-wait"} {
+	for _, want := range []string{"# Nimbus agent guide", "X-Viewer-Email", "## Command reference", "### `nimbus deploy [dir]`", "--no-wait",
+		"### `nimbus org external-sharing on|off`"} {
 		if !strings.Contains(md, want) {
 			t.Errorf("docs output is missing %q", want)
 		}
+	}
+}
+
+func TestDeployText(t *testing.T) {
+	five, n := 5, 2
+	work := &deployResult{App: "planner", URL: "https://planner.acme.example", Owner: "you@acme.com", Org: "acme.com", OrgKind: "work",
+		Visibility: "private", AppsUsed: n, AppsLimit: &five, SharesLimit: &five, Version: 1, State: "live"}
+	want := "Deployed to the acme.com workspace.\nhttps://planner.acme.example\nPrivate: only you can open it.\n" +
+		"nimbus share sam@acme.com · nimbus share --public\nApps: 2/5 · Shares on this app: 0/5"
+	if got := work.Text(); got != want {
+		t.Errorf("work deploy text =\n%s\nwant\n%s", got, want)
+	}
+	personal := &deployResult{App: "blog", URL: "https://blog.u-you.example", Owner: "you@gmail.com", Org: "u-you", OrgKind: "personal",
+		Visibility: "shared", SharesUsed: 1, Version: 2, State: "live", Unchanged: true}
+	want = "Deployed to your personal space (you@gmail.com).\nhttps://blog.u-you.example\nShared with 1 person.\n" +
+		"nimbus share friend@gmail.com · nimbus share --public\nVersion 2, unchanged."
+	if got := personal.Text(); got != want {
+		t.Errorf("personal deploy text =\n%s\nwant\n%s", got, want)
 	}
 }

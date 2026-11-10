@@ -19,24 +19,23 @@ const FileName = "nimbus.yaml"
 
 // Manifest is the whole of nimbus.yaml in v0.1.
 type Manifest struct {
-	Name    string   `yaml:"name"`
-	Port    int      `yaml:"port,omitempty"`
-	Account string   `yaml:"account,omitempty"` // Personal or Work; "" until the user has said
-	Scopes  []string `yaml:"scopes,omitempty"`
+	Name string `yaml:"name"`
+	Port int    `yaml:"port,omitempty"`
+	// Org is the workspace domain (acme.com) or personal space (u-you) the
+	// project deploys to, or "" until the first deploy writes it.
+	Org    string   `yaml:"org,omitempty"`
+	Scopes []string `yaml:"scopes,omitempty"`
 }
-
-// The values of account. A personal project runs under a personal Google
-// account and is always public; a work project runs in a company's org,
-// private to the people it's shared with.
-const (
-	Personal = "personal"
-	Work     = "work"
-)
 
 var (
 	nameRE  = regexp.MustCompile(`^[a-z]([a-z0-9-]*[a-z0-9])?$`)
+	labelRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
 	scopeRE = regexp.MustCompile(`^[a-z0-9][a-z0-9_.:-]*$`)
-	fields  = []string{"name", "port", "account", "scopes"}
+	fields  = []string{"name", "port", "org", "scopes"}
+	// legacyFields are accepted and ignored, so projects from older CLIs
+	// still deploy. Writing org: removes them.
+	legacyFields = []string{"account"}
+	legacyLineRE = regexp.MustCompile(`(?m)^account[ \t]*:.*(\n|$)`)
 )
 
 // ValidName reports whether s can be an app name. Names become DNS labels.
@@ -105,8 +104,8 @@ func Parse(b []byte) (*Manifest, error) {
 			return nil, invalid("Remove `share:` from nimbus.yaml and run `nimbus share <email>` instead.",
 				"nimbus.yaml has a `share:` field, but sharing isn't part of the manifest.")
 		}
-		if !slices.Contains(fields, k) {
-			return nil, invalid("Allowed fields: name, port, account, scopes. Run `nimbus docs` for the format.",
+		if !slices.Contains(fields, k) && !slices.Contains(legacyFields, k) {
+			return nil, invalid("Allowed fields: name, port, org, scopes. Run `nimbus docs` for the format.",
 				"nimbus.yaml has an unknown field `%s`.", k)
 		}
 	}
@@ -114,9 +113,10 @@ func Parse(b []byte) (*Manifest, error) {
 	if err := yaml.Unmarshal(b, &m); err != nil {
 		return nil, invalid("Run `nimbus docs` for the format.", "nimbus.yaml has a field of the wrong type: %v", err)
 	}
-	if _, ok := raw["account"]; ok && m.Account == "" {
-		return nil, invalidAccount("")
+	if _, ok := raw["org"]; ok && m.Org == "" {
+		return nil, invalidOrg("")
 	}
+	m.Org = strings.ToLower(strings.TrimSpace(m.Org))
 	if err := m.Validate(); err != nil {
 		return nil, err
 	}
@@ -136,8 +136,8 @@ func (m *Manifest) Validate() error {
 		return invalid("Use a port between 1 and 65535, or leave `port` out to get 8080.",
 			"`port: %d` in nimbus.yaml is out of range.", m.Port)
 	}
-	if m.Account != "" && m.Account != Personal && m.Account != Work {
-		return invalidAccount(m.Account)
+	if m.Org != "" && !ValidOrg(m.Org) {
+		return invalidOrg(m.Org)
 	}
 	for _, s := range m.Scopes {
 		if !scopeRE.MatchString(s) {
@@ -148,36 +148,52 @@ func (m *Manifest) Validate() error {
 	return nil
 }
 
+// ValidOrg reports whether s can be an org's key: a domain (labels joined by
+// dots) or a personal space's slug (one label).
+func ValidOrg(s string) bool {
+	if s == "" || len(s) > 253 {
+		return false
+	}
+	for _, l := range strings.Split(s, ".") {
+		if len(l) > 63 || !labelRE.MatchString(l) {
+			return false
+		}
+	}
+	return true
+}
+
 // Write creates dir/nimbus.yaml for a new app. It never overwrites a file.
-func Write(dir, name, account string) error {
+func Write(dir, name, org string) error {
 	f, err := os.OpenFile(filepath.Join(dir, FileName), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(f, "# Nimbus app manifest. Run `nimbus docs` for the format.\nname: %s\naccount: %s\n", name, account)
+	_, err = fmt.Fprintf(f, "# Nimbus app manifest. Run `nimbus docs` for the format.\nname: %s\norg: %s\n", name, org)
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}
 	return err
 }
 
-// SetAccount adds `account:` to an existing dir/nimbus.yaml that has none,
-// appending a line so the rest of the file stays exactly as it was. If the
-// line can't simply be appended (a flow-style mapping, say), it changes
-// nothing and asks for the line to be added by hand.
-func SetAccount(dir, account string) error {
+// SetOrg adds `org:` to an existing dir/nimbus.yaml that has none,
+// appending a line so the rest of the file stays as it was, apart from a
+// legacy `account` line, which it removes. If the line can't simply be
+// appended (a flow-style mapping, say), it changes nothing and asks for the
+// line to be added by hand.
+func SetOrg(dir, org string) error {
 	path := filepath.Join(dir, FileName)
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}
+	b = legacyLineRE.ReplaceAll(b, nil)
 	if len(b) > 0 && b[len(b)-1] != '\n' {
 		b = append(b, '\n')
 	}
-	b = append(b, "account: "+account+"\n"...)
-	if m, err := Parse(b); err != nil || m.Account != account {
-		return invalid(fmt.Sprintf("Add the line `account: %s` to nimbus.yaml, then run `nimbus deploy` again.", account),
-			"Couldn't add `account: %s` to nimbus.yaml automatically.", account)
+	b = append(b, "org: "+org+"\n"...)
+	if m, err := Parse(b); err != nil || m.Org != org {
+		return invalid(fmt.Sprintf("Add the line `org: %s` to nimbus.yaml, then run `nimbus deploy` again.", org),
+			"Couldn't add `org: %s` to nimbus.yaml automatically.", org)
 	}
 	fi, err := os.Stat(path)
 	if err != nil {
@@ -186,9 +202,9 @@ func SetAccount(dir, account string) error {
 	return os.WriteFile(path, b, fi.Mode().Perm())
 }
 
-func invalidAccount(value string) *output.Error {
-	return invalid("Use `account: personal` or `account: work`, or remove the line to be asked again.",
-		"`account: %s` in nimbus.yaml isn't valid.", value)
+func invalidOrg(value string) *output.Error {
+	return invalid("Remove the `org` line from nimbus.yaml, and `nimbus deploy` writes it again.",
+		"`org: %s` in nimbus.yaml isn't a workspace domain or a personal space like u-you.", value)
 }
 
 func invalid(hint, format string, args ...any) *output.Error {

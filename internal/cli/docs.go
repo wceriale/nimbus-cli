@@ -34,17 +34,23 @@ stdout isn't a terminal; pass --json to get {"markdown": "..."}.`,
 func reference(root *cobra.Command) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "## Command reference\n\nGenerated from nimbus %s.\n\nGlobal flags:\n\n```\n%s```\n", Version, root.PersistentFlags().FlagUsages())
-	for _, c := range root.Commands() {
-		if c.Hidden || c.Name() == "help" {
-			continue
-		}
-		fmt.Fprintf(&b, "\n### `nimbus %s`\n\n%s\n", c.Use, firstNonEmpty(c.Long, c.Short))
-		if f := c.LocalNonPersistentFlags().FlagUsages(); f != "" {
-			fmt.Fprintf(&b, "\nFlags:\n\n```\n%s```\n", f)
-		}
-		if c.Example != "" {
-			fmt.Fprintf(&b, "\nExample:\n\n```\n%s\n```\n", c.Example)
+	var document func(cmds []*cobra.Command)
+	document = func(cmds []*cobra.Command) {
+		for _, c := range cmds {
+			if c.Hidden || c.Name() == "help" {
+				continue
+			}
+			// The parents' path plus Use, e.g. "nimbus org external-sharing on|off".
+			fmt.Fprintf(&b, "\n### `%s%s`\n\n%s\n", strings.TrimSuffix(c.CommandPath(), c.Name()), c.Use, firstNonEmpty(c.Long, c.Short))
+			if f := c.LocalNonPersistentFlags().FlagUsages(); f != "" {
+				fmt.Fprintf(&b, "\nFlags:\n\n```\n%s```\n", f)
+			}
+			if c.Example != "" {
+				fmt.Fprintf(&b, "\nExample:\n\n```\n%s\n```\n", c.Example)
+			}
+			document(c.Commands())
 		}
 	}
+	document(root.Commands())
 	return b.String()
 }

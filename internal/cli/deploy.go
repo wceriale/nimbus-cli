@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -24,7 +25,7 @@ const (
 )
 
 func (a *App) deployCmd() *cobra.Command {
-	var noWait, personal, work bool
+	var noWait bool
 	cmd := &cobra.Command{
 		Use:   "deploy [dir]",
 		Short: "Build and ship a directory (default: the current one), then print its URL",
@@ -33,55 +34,44 @@ new version serves traffic. That usually takes 1–3 minutes and is capped at 10
 so give this command a timeout of at least 10 minutes, or pass --no-wait and
 poll nimbus status.
 
-A project is personal or work, and only the user can say which. Until
-nimbus.yaml has an account, deploy fails with "ask_user": ask the user, then
-pass --personal or --work. Personal projects are public: anyone with the URL can
-open them. Work projects are private, behind the company's Google sign-in, for
-the people they're shared with. The answer is saved in nimbus.yaml, and deploy
-checks it against the account you're logged in with.
+The app goes where the account you're logged in with belongs: a work account
+deploys into its domain's workspace, and a personal account, such as Gmail,
+into its personal space. The first deploy writes nimbus.yaml, naming the app
+after the directory (or --app), and records that place as org:, so later
+deploys go to the same place. If you're logged in with another account than
+org: names, deploy fails with wrong_account.
 
-The first deploy writes nimbus.yaml, naming the app after the directory (or
---app). The upload skips .gitignore matches, .git, node_modules, .venv,
-__pycache__ and every .env* file. A Dockerfile is used if there is one;
-otherwise the runtime (Python, Node, Go) is detected.
+The upload skips .gitignore matches, .git, node_modules, .venv, __pycache__
+and every .env* file. A Dockerfile is used if there is one; otherwise the
+runtime (Python, Node, Go) is detected.
 
-Deploying the same source again returns "unchanged": true and builds nothing.
-After the first deploy of a work project, only you can open it: share it with
-nimbus share.`,
-		Example: `  # The first deploy, before the user has said personal or work:
-  $ nimbus deploy
-  {"ok":false,"error":{"code":"ask_user","message":"Ask the user whether this is a personal or a work project, and don't choose for them. ...","hint":"Then run ` + "`nimbus deploy --personal` or `nimbus deploy --work`" + `. ..."}}
-
-  $ nimbus deploy --work
-  {"ok":true,"data":{"app":"renewal-desk","url":"https://renewal-desk.acme.nimbus-apps.dev","account":"work","version":1,"state":"live","unchanged":false,"manifest_created":true,"shared_with":["you@acme.com"],"next":"Only you can open it. ..."}}
+Every new app is private: only you can open it until you run nimbus share.
+Deploying the same source again returns "unchanged": true and builds nothing.`,
+		Example: `  $ nimbus deploy
+  {"ok":true,"data":{"app":"renewal-desk","url":"https://renewal-desk.acme.nimbus-apps.dev","org":"acme.com","org_kind":"work","visibility":"private","shares_used":0,"shares_limit":5,"apps_used":1,"apps_limit":5,"version":1,"state":"live","unchanged":false,"manifest_created":true,"shared_with":["you@acme.com"],"next":"Only you can open it. ..."}}
 
   # On failure, error.log_tail has the end of the log:
   {"ok":false,"error":{"code":"start_failed","message":"Container didn't listen on port 8080 within 60s","hint":"Listen on 0.0.0.0:$PORT. ...","log_tail":["..."]}}`,
 		Args: maxArgs(1),
 		RunE: a.run(func(ctx context.Context, args []string) (any, error) {
-			if personal && work {
-				return nil, output.Usage("Pass --personal or --work, not both.", "Ask the user which one this project is.")
-			}
-			var account string
-			switch {
-			case personal:
-				account = manifest.Personal
-			case work:
-				account = manifest.Work
-			}
-			return a.deploy(ctx, args, noWait, account)
+			return a.deploy(ctx, args, noWait)
 		}),
 	}
 	cmd.Flags().BoolVar(&noWait, "no-wait", false, "return once the build is queued; follow it with nimbus status")
-	cmd.Flags().BoolVar(&personal, "personal", false, "the user said it's a personal project: public, under their personal Google account")
-	cmd.Flags().BoolVar(&work, "work", false, "the user said it's a work project: private, in their company's org")
 	return cmd
 }
 
 type deployResult struct {
 	App             string   `json:"app"`
 	URL             string   `json:"url"`
-	Account         string   `json:"account"` // personal or work
+	Owner           string   `json:"-"`
+	Org             string   `json:"org"`      // what nimbus.yaml's org: holds
+	OrgKind         string   `json:"org_kind"` // personal or work
+	Visibility      string   `json:"visibility"`
+	SharesUsed      int      `json:"shares_used"`
+	SharesLimit     *int     `json:"shares_limit"`
+	AppsUsed        int      `json:"apps_used"`
+	AppsLimit       *int     `json:"apps_limit"`
 	Version         int      `json:"version"`
 	State           string   `json:"state"`
 	Unchanged       bool     `json:"unchanged"`
@@ -93,17 +83,50 @@ type deployResult struct {
 }
 
 func (r *deployResult) Text() string {
-	s := fmt.Sprintf("%s version %d is %s: %s", r.App, r.Version, r.State, r.URL)
+	if r.State != "live" {
+		s := fmt.Sprintf("%s version %d is %s: %s", r.App, r.Version, r.State, r.URL)
+		if r.Next != "" {
+			s += "\n" + r.Next
+		}
+		return s
+	}
+	var b strings.Builder
+	if r.OrgKind == api.OrgPersonal {
+		fmt.Fprintf(&b, "Deployed to your personal space (%s).\n", r.Owner)
+	} else {
+		fmt.Fprintf(&b, "Deployed to the %s workspace.\n", r.Org)
+	}
+	b.WriteString(r.URL + "\n")
+	switch r.Visibility {
+	case "public":
+		b.WriteString("Public: anyone with the link can open it.\n")
+	case "shared":
+		fmt.Fprintf(&b, "Shared with %s.\n", people(r.SharesUsed))
+	default:
+		b.WriteString("Private: only you can open it.\n")
+	}
+	example := "friend@gmail.com"
+	if r.OrgKind == api.OrgWork {
+		example = "sam@" + r.Org
+	}
+	fmt.Fprintf(&b, "nimbus share %s · nimbus share --public", example)
+	if r.AppsLimit != nil && r.SharesLimit != nil {
+		fmt.Fprintf(&b, "\nApps: %d/%d · Shares on this app: %d/%d", r.AppsUsed, *r.AppsLimit, r.SharesUsed, *r.SharesLimit)
+	}
 	if r.Unchanged {
-		s += " (unchanged)"
+		fmt.Fprintf(&b, "\nVersion %d, unchanged.", r.Version)
 	}
-	if r.Next != "" {
-		s += "\n" + r.Next
-	}
-	return s
+	return b.String()
 }
 
-func (a *App) deploy(ctx context.Context, args []string, noWait bool, flagAccount string) (any, error) {
+func people(n int) string {
+	if n == 1 {
+		return "1 person"
+	}
+	return fmt.Sprintf("%d people", n)
+}
+
+func (a *App) deploy(ctx context.Context, args []string, noWait bool) (any, error) {
 	dir := a.WorkDir
 	if len(args) == 1 {
 		dir = args[0]
@@ -115,9 +138,6 @@ func (a *App) deploy(ctx context.Context, args []string, noWait bool, flagAccoun
 		return nil, output.Errorf("not_a_directory", "Pass the app's directory, e.g. `nimbus deploy .`.", "%s isn't a directory.", dir)
 	}
 
-	// Settle the manifest and whether the project is personal or work before
-	// the login check, so the agent asks the user first, and before writing
-	// anything into the user's directory.
 	m, err := manifest.Load(dir)
 	created := errors.Is(err, fs.ErrNotExist)
 	switch {
@@ -128,11 +148,6 @@ func (a *App) deploy(ctx context.Context, args []string, noWait bool, flagAccoun
 		}
 		m = &manifest.Manifest{Name: name}
 	case err != nil:
-		return nil, err
-	}
-	saveAccount := m.Account == ""
-	account, err := projectAccount(m.Account, flagAccount)
-	if err != nil {
 		return nil, err
 	}
 	name := m.Name
@@ -148,18 +163,18 @@ func (a *App) deploy(ctx context.Context, args []string, noWait bool, flagAccoun
 		return nil, err
 	}
 	c := sess.client
-	me, err := c.Me(ctx)
+	// The server decides where the app goes, and refuses a project pinned to
+	// another org with wrong_account. Nothing is written into the user's
+	// directory until it has answered.
+	app, err := c.EnsureApp(ctx, name, m.Org)
 	if err != nil {
-		return nil, err
-	}
-	if err := checkAccount(account, me); err != nil {
 		return nil, err
 	}
 	switch {
 	case created:
-		err = manifest.Write(dir, m.Name, account)
-	case saveAccount:
-		err = manifest.SetAccount(dir, account)
+		err = manifest.Write(dir, m.Name, app.Org)
+	case m.Org == "":
+		err = manifest.SetOrg(dir, app.Org)
 	}
 	if err != nil {
 		return nil, err
@@ -171,11 +186,6 @@ func (a *App) deploy(ctx context.Context, args []string, noWait bool, flagAccoun
 		return nil, err
 	}
 	p.Progress("Packaged %d files (%s).", b.Files, humanBytes(len(b.Data)))
-
-	app, err := c.EnsureApp(ctx, name)
-	if err != nil {
-		return nil, err
-	}
 	up, err := c.CreateUpload(ctx, name, b.SHA256, len(b.Data))
 	if err != nil {
 		return nil, err
@@ -190,8 +200,9 @@ func (a *App) deploy(ctx context.Context, args []string, noWait bool, flagAccoun
 	if err != nil {
 		return nil, err
 	}
-	res := &deployResult{App: name, URL: app.URL, Account: account, Version: v.Number, State: v.State, Unchanged: unchanged,
+	res := &deployResult{App: name, Version: v.Number, State: v.State, Unchanged: unchanged,
 		ManifestCreated: created, EnvFilesSkipped: b.SkippedEnv}
+	res.setApp(app)
 	if noWait && !unchanged {
 		res.Next = fmt.Sprintf("Run `nimbus status %s` until state is live or failed.", name)
 		return res, nil
@@ -204,52 +215,22 @@ func (a *App) deploy(ctx context.Context, args []string, noWait bool, flagAccoun
 	if app, err = c.GetApp(ctx, name); err != nil {
 		return nil, err
 	}
-	res.URL, res.SharedWith, res.Public, res.Version, res.State = app.URL, app.SharedWith, app.Public, v.Number, v.State
-	switch {
-	case account == manifest.Personal:
-		res.Next = "It's a personal project, so it's public: anyone with the URL can open it without signing in, and the app gets no X-Viewer-Email."
-	case !app.Public && len(app.SharedWith) <= 1:
-		res.Next = "Only you can open it. Run `nimbus share <email>` to give coworkers access."
+	res.setApp(app)
+	res.Version, res.State = v.Number, v.State
+	if !app.Public && len(app.SharedWith) <= 1 {
+		res.Next = "Only you can open it. Run `nimbus share <email>` to give people access, or `nimbus share --public` to open it to everyone."
+	}
+	if created || m.Org == "" {
+		res.Next = strings.TrimSpace(res.Next + " Commit nimbus.yaml: its org: line keeps deploys going to " + app.Org + ".")
 	}
 	return res, nil
 }
 
-// projectAccount settles whether the project is personal or work: what
-// nimbus.yaml says, else the flag. If neither says, only the user can.
-func projectAccount(saved, flag string) (string, error) {
-	switch {
-	case saved != "" && flag != "" && flag != saved:
-		return "", output.Errorf("account_conflict",
-			fmt.Sprintf("Drop --%s. If the user says this is a %s project after all, change `account` in nimbus.yaml to %s and deploy again.", flag, flag, flag),
-			"nimbus.yaml says this is a %s project, but --%s was passed.", saved, flag)
-	case saved != "":
-		return saved, nil
-	case flag != "":
-		return flag, nil
-	}
-	return "", output.AskUser(
-		"Ask the user whether this is a personal or a work project, and don't choose for them. "+
-			"Personal projects are public: anyone with the URL can open them. "+
-			"Work projects are private: only the people the user shares them with can open them, behind their company's Google sign-in.",
-		"Then run `nimbus deploy --personal` or `nimbus deploy --work`. The answer is saved in nimbus.yaml, so later deploys don't ask.")
-}
-
-// checkAccount makes sure the login fits the project: personal projects go
-// under a personal Google account, and work projects into a company's org.
-func checkAccount(account string, me *api.Me) error {
-	switch {
-	case account == manifest.Personal && !me.Org.Personal:
-		return output.Errorf("wrong_account",
-			"Run `nimbus logout`, then `nimbus login`, and ask the user to sign in with a personal Google account, such as Gmail.",
-			"This is a personal project, but you're logged in with %s, a work account.", me.Email)
-	case account == manifest.Work && me.Org.Personal:
-		return output.Errorf("wrong_account",
-			"Run `nimbus logout`, then `nimbus login`, and ask the user to sign in with their work Google account. "+
-				"If their company isn't on nimbus, ask them whether to make this a personal project instead: it would be public.",
-			"This is a work project, but you're logged in with %s, a personal account on nimbus. "+
-				"A company account counts as personal when the company isn't set up on nimbus.", me.Email)
-	}
-	return nil
+// setApp copies what the deploy output reports from the app.
+func (r *deployResult) setApp(app *api.App) {
+	r.URL, r.Owner, r.SharedWith, r.Public = app.URL, app.Owner, app.SharedWith, app.Public
+	r.Org, r.OrgKind, r.Visibility = app.Org, app.OrgKind, app.Visibility
+	r.SharesUsed, r.SharesLimit, r.AppsUsed, r.AppsLimit = app.SharesUsed, app.SharesLimit, app.AppsUsed, app.AppsLimit
 }
 
 // waitForVersion polls until the version is live or failed.

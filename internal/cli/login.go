@@ -29,16 +29,16 @@ URL, and after they approve, run nimbus login again: it returns
 "status": "logged_in". Running it while already logged in just returns
 "logged_in".
 
-"personal": true means the user signed in with a personal Google account,
-such as Gmail, which hosts personal projects. A work Google account from a
-company on nimbus hosts work projects.`,
+A work account's apps go into its domain's workspace, and a personal account's,
+such as Gmail's, into its personal space. "org" names that place once the
+first deploy has created it.`,
 		Example: `  # Agent, step 1: get a URL for the user
   $ nimbus login
   {"ok":true,"data":{"status":"pending","api_url":"https://api.nimby.run","verification_url":"https://auth.nimby.run/device?code=WDJB-MJHT","user_code":"WDJB-MJHT","expires_in":600,"browser_opened":false,"next":"Show the user verification_url ..."}}
 
   # Agent, step 2: after the user approves
   $ nimbus login
-  {"ok":true,"data":{"status":"logged_in","email":"you@acme.com","org":"acme","personal":false,"api_url":"https://api.nimby.run","auth":"login"}}`,
+  {"ok":true,"data":{"status":"logged_in","email":"you@acme.com","domain":"acme.com","org":"acme.com","org_kind":"work","api_url":"https://api.nimby.run","auth":"login"}}`,
 		Args: noArgs,
 		RunE: a.run(func(ctx context.Context, _ []string) (any, error) {
 			return a.login(ctx, wait || a.StdoutIsTTY)
@@ -51,8 +51,9 @@ company on nimbus hosts work projects.`,
 type loginResult struct {
 	Status          string `json:"status"` // pending or logged_in
 	Email           string `json:"email,omitempty"`
-	Org             string `json:"org,omitempty"`
-	Personal        *bool  `json:"personal,omitempty"` // set once logged in
+	Domain          string `json:"domain,omitempty"`   // the account's verified domain; "" for a personal account
+	Org             string `json:"org,omitempty"`      // where apps go; "" before the first deploy
+	OrgKind         string `json:"org_kind,omitempty"` // personal or work
 	APIURL          string `json:"api_url"`
 	Auth            string `json:"auth,omitempty"`
 	VerificationURL string `json:"verification_url,omitempty"`
@@ -66,8 +67,8 @@ func (r *loginResult) Text() string {
 	if r.Status == "pending" {
 		return fmt.Sprintf("Open this URL and approve the code %s:\n  %s\nThen run `nimbus login` again.", r.UserCode, r.VerificationURL)
 	}
-	if r.Personal != nil && *r.Personal {
-		return fmt.Sprintf("Logged in to %s as %s (personal account).", r.APIURL, r.Email)
+	if r.Org == "" {
+		return fmt.Sprintf("Logged in to %s as %s.", r.APIURL, r.Email)
 	}
 	return fmt.Sprintf("Logged in to %s as %s (%s).", r.APIURL, r.Email, r.Org)
 }
@@ -167,10 +168,11 @@ func (a *App) pollLogin(ctx context.Context, c *api.Client, store config.Store, 
 			_ = store.DeletePending()
 			return nil, output.Errorf("login_denied", "Ask the user what happened, then run `nimbus login` again.",
 				"The login was denied in the browser.")
-		case "org_not_enabled":
+		case "domain_not_enabled":
 			_ = store.DeletePending()
-			return nil, output.Errorf("org_not_enabled", "Tell the user Nimbus is invite-only for now: their org has to be onboarded first.",
-				"%s", firstNonEmpty(oe.Description, "This account's org isn't enabled on Nimbus."))
+			return nil, output.Errorf("domain_not_enabled",
+				"Tell the user Nimbus is in private testing and their work domain isn't enabled yet: they can ask to have it enabled, or sign in with a personal Google account, such as Gmail.",
+				"%s", firstNonEmpty(oe.Description, "This account's domain isn't enabled yet."))
 		default:
 			_ = store.DeletePending()
 			return nil, output.Errorf("login_failed", "Run `nimbus login` again.", "Login failed: %v.", oe)
@@ -209,7 +211,10 @@ func (a *App) finishLogin(ctx context.Context, c *api.Client, store config.Store
 	if err != nil {
 		return nil, err
 	}
-	creds.Email, creds.Org = me.Email, me.Org.Slug
+	creds.Email = me.Email
+	if me.Org != nil {
+		creds.Org = me.Org.Slug
+	}
 	if err := store.SaveCredentials(creds); err != nil {
 		return nil, err
 	}
@@ -230,7 +235,11 @@ func (a *App) pendingResult(p *config.PendingLogin, browserOpened *bool) *loginR
 }
 
 func loggedIn(base string, me *api.Me, auth string) *loginResult {
-	return &loginResult{Status: "logged_in", Email: me.Email, Org: me.Org.Slug, Personal: &me.Org.Personal, APIURL: base, Auth: auth}
+	r := &loginResult{Status: "logged_in", Email: me.Email, Domain: me.Domain, APIURL: base, Auth: auth}
+	if me.Org != nil {
+		r.Org, r.OrgKind = me.Org.Key, me.Org.Kind
+	}
+	return r
 }
 
 func (a *App) logoutCmd() *cobra.Command {

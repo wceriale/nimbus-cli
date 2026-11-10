@@ -42,12 +42,6 @@ func Usage(message, hint string) *Error {
 	return &Error{Code: "usage", Message: message, Hint: hint, usage: true}
 }
 
-// AskUser reports a decision only the user can make. Like a usage error, it
-// exits 2: the command can't run until the agent passes the user's answer.
-func AskUser(message, hint string) *Error {
-	return &Error{Code: "ask_user", Message: message, Hint: hint, usage: true}
-}
-
 // Texter is implemented by results that have a human-readable form.
 type Texter interface{ Text() string }
 

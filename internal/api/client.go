@@ -108,10 +108,16 @@ func (c *Client) ListApps(ctx context.Context) ([]App, error) {
 	return r.Apps, nil
 }
 
-// EnsureApp creates the app if it doesn't exist yet.
-func (c *Client) EnsureApp(ctx context.Context, name string) (*App, error) {
+// EnsureApp creates the app if it doesn't exist yet. org is nimbus.yaml's
+// org:, or "" if it has none; the server answers wrong_account if it isn't
+// the account's org.
+func (c *Client) EnsureApp(ctx context.Context, name, org string) (*App, error) {
+	in := map[string]string{}
+	if org != "" {
+		in["org"] = org
+	}
 	var app App
-	if err := c.do(ctx, http.MethodPut, appPath(name), struct{}{}, &app); err != nil {
+	if err := c.do(ctx, http.MethodPut, appPath(name), in, &app); err != nil {
 		return nil, err
 	}
 	return &app, nil
@@ -217,6 +223,16 @@ func (c *Client) UpdateShares(ctx context.Context, name string, add, remove []st
 		return nil, err
 	}
 	return &s, nil
+}
+
+// SetExternalSharing turns a work org's external sharing on or off. id is
+// the org's id or slug.
+func (c *Client) SetExternalSharing(ctx context.Context, id string, on bool) (*OrgUpdate, error) {
+	var u OrgUpdate
+	if err := c.do(ctx, http.MethodPatch, "/v1/orgs/"+url.PathEscape(id), map[string]bool{"external_sharing": on}, &u); err != nil {
+		return nil, err
+	}
+	return &u, nil
 }
 
 // do sends a JSON request to a /v1 endpoint. On a 401 it retries once with a

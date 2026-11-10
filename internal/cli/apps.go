@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 
@@ -45,8 +46,11 @@ func (a *App) whoamiCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "whoami",
 		Short: "Show who you're logged in as; use it to check the login before other commands",
+		Long: `Show who you're logged in as, and where your apps go: the workspace of your
+work domain, or for a personal account, such as Gmail, your personal space.
+"org" is empty until the first deploy creates it.`,
 		Example: `  $ nimbus whoami
-  {"ok":true,"data":{"email":"you@acme.com","org":"acme","org_name":"Acme","personal":false,"idp":"google","api_url":"https://api.nimby.run","auth":"login","cli_version":"v0.1.0"}}`,
+  {"ok":true,"data":{"email":"you@acme.com","domain":"acme.com","org":"acme.com","org_kind":"work","role":"owner","external_sharing":false,"apps_used":2,"apps_limit":5,"idp":"google","api_url":"https://api.nimby.run","auth":"login","cli_version":"v0.1.0"}}`,
 		Args: noArgs,
 		RunE: a.run(func(ctx context.Context, _ []string) (any, error) {
 			sess, err := a.session()
@@ -57,29 +61,61 @@ func (a *App) whoamiCmd() *cobra.Command {
 			if err != nil {
 				return nil, err
 			}
-			return &whoamiResult{Email: me.Email, Org: me.Org.Slug, OrgName: me.Org.Name, Personal: me.Org.Personal, IdP: me.IdP,
-				APIURL: sess.apiURL, Auth: sess.auth, CLIVersion: Version}, nil
+			res := &whoamiResult{Email: me.Email, Domain: me.Domain, IdP: me.IdP, APIURL: sess.apiURL, Auth: sess.auth, CLIVersion: Version}
+			if o := me.Org; o != nil {
+				res.Org, res.OrgKind, res.Role, res.ExternalSharing = o.Key, o.Kind, o.Role, o.ExternalSharing
+				res.AppsUsed, res.AppsLimit = &o.AppsUsed, o.AppsLimit
+			} else {
+				res.Next = "No apps yet: your first `nimbus deploy` creates " + firstPlace(me.Domain) + "."
+			}
+			return res, nil
 		}),
 	}
 }
 
+// firstPlace names where a first deploy goes for an account with domain.
+func firstPlace(domain string) string {
+	if domain == "" {
+		return "your personal space"
+	}
+	return "the " + domain + " workspace"
+}
+
 type whoamiResult struct {
-	Email      string `json:"email"`
-	Org        string `json:"org"`
-	OrgName    string `json:"org_name"`
-	Personal   bool   `json:"personal"` // a personal Google account, for personal projects
-	IdP        string `json:"idp"`
-	APIURL     string `json:"api_url"`
-	Auth       string `json:"auth"`
-	CLIVersion string `json:"cli_version"`
+	Email           string `json:"email"`
+	Domain          string `json:"domain"`   // the account's verified domain; "" for a personal account
+	Org             string `json:"org"`      // where apps go, as nimbus.yaml's org: says it; "" before the first deploy
+	OrgKind         string `json:"org_kind"` // personal or work
+	Role            string `json:"role,omitempty"`
+	ExternalSharing bool   `json:"external_sharing"`
+	AppsUsed        *int   `json:"apps_used,omitempty"`
+	AppsLimit       *int   `json:"apps_limit,omitempty"`
+	IdP             string `json:"idp"`
+	APIURL          string `json:"api_url"`
+	Auth            string `json:"auth"`
+	CLIVersion      string `json:"cli_version"`
+	Next            string `json:"next,omitempty"`
 }
 
 func (r *whoamiResult) Text() string {
-	org := r.OrgName
-	if r.Personal {
-		org = "personal account"
+	var place string
+	switch {
+	case r.Org == "":
+		place = "no apps yet"
+	case r.OrgKind == api.OrgPersonal:
+		place = "personal space " + r.Org
+	default:
+		place = r.Org + " workspace, " + r.Role
 	}
-	return fmt.Sprintf("%s (%s, signed in with %s)\nAPI: %s\nCLI: %s", r.Email, org, r.IdP, r.APIURL, r.CLIVersion)
+	s := fmt.Sprintf("%s (%s, signed in with %s)", r.Email, place, r.IdP)
+	if r.AppsUsed != nil && r.AppsLimit != nil {
+		s += fmt.Sprintf("\nApps: %d/%d", *r.AppsUsed, *r.AppsLimit)
+	}
+	s += fmt.Sprintf("\nAPI: %s\nCLI: %s", r.APIURL, r.CLIVersion)
+	if r.Next != "" {
+		s += "\n" + r.Next
+	}
+	return s
 }
 
 func (a *App) statusCmd() *cobra.Command {
@@ -212,24 +248,26 @@ func (a *App) shareCmd() *cobra.Command {
 	var public bool
 	cmd := &cobra.Command{
 		Use:   "share [email]...",
-		Short: "Give people in your org access to a work app, or with --public open it to everyone",
-		Long: `Give people in your org access to a work app. The app defaults to --app, then
-to name in ./nimbus.yaml. Prints everyone who has access afterwards.
+		Short: "Give people access to an app by email, or with --public open it to everyone",
+		Long: `Give people access to an app by email. The app defaults to --app, then to name
+in ./nimbus.yaml. Prints everyone who has access afterwards.
 
-Only addresses in your own org work, and nobody is notified: send them the URL.
-Redeploying never changes who has access.
+An app in your personal space can be shared with any Google account. An app in
+a work workspace can be shared with addresses in the workspace's domain, and
+outside it only once the workspace owner turns on external sharing (nimbus org
+external-sharing on). On the free plan an app can be shared with 5 people.
+Nobody is notified: send them the URL. Redeploying never changes who has
+access.
 
 With --public, anyone on the internet can open the app without signing in, and
-the app gets no X-Viewer-Email header. The share list is kept for when you make
-it private again with nimbus unshare --public.
-
-Sharing by email and --public are for work projects. Personal projects are
-always public, so there's nothing to share: send people the URL.`,
+the app gets no X-Viewer-Email header. Public doesn't count as a share. The
+share list is kept for when you make it private again with nimbus unshare
+--public.`,
 		Example: `  $ nimbus share lena@acme.com
-  {"ok":true,"data":{"app":"renewal-desk","url":"https://renewal-desk.acme.nimbus-apps.dev","shared_with":["you@acme.com","lena@acme.com"],"public":false,"next":"Send them the URL. ..."}}
+  {"ok":true,"data":{"app":"renewal-desk","url":"https://renewal-desk.acme.nimbus-apps.dev","shared_with":["you@acme.com","lena@acme.com"],"public":false,"visibility":"shared","shares_used":1,"shares_limit":5,"next":"Send them the URL. ..."}}
 
   $ nimbus share --public
-  {"ok":true,"data":{"app":"renewal-desk","url":"https://renewal-desk.acme.nimbus-apps.dev","shared_with":["you@acme.com","lena@acme.com"],"public":true,"next":"Anyone with the URL can open it. ..."}}`,
+  {"ok":true,"data":{"app":"renewal-desk","url":"https://renewal-desk.acme.nimbus-apps.dev","shared_with":["you@acme.com","lena@acme.com"],"public":true,"visibility":"public","shares_used":1,"shares_limit":5,"next":"Anyone with the URL can open it. ..."}}`,
 		Args: emailsOrPublic(&public),
 		RunE: a.run(func(ctx context.Context, args []string) (any, error) { return a.updateShares(ctx, args, true, public) }),
 	}
@@ -241,19 +279,17 @@ func (a *App) unshareCmd() *cobra.Command {
 	var public bool
 	cmd := &cobra.Command{
 		Use:   "unshare [email]...",
-		Short: "Take away people's access to a work app, or with --public make it private again",
-		Long: `Take away people's access to a work app. The app defaults to --app, then to
-name in ./nimbus.yaml. Prints everyone who has access afterwards.
+		Short: "Take away people's access to an app, or with --public make it private again",
+		Long: `Take away people's access to an app. The app defaults to --app, then to name in
+./nimbus.yaml. Prints everyone who has access afterwards.
 
 With --public, a public app becomes private again: viewers have to sign in, and
-only the people it's shared with get in.
-
-Personal projects are always public and can't be made private.`,
+only the people it's shared with get in.`,
 		Example: `  $ nimbus unshare lena@acme.com
-  {"ok":true,"data":{"app":"renewal-desk","url":"https://renewal-desk.acme.nimbus-apps.dev","shared_with":["you@acme.com"],"public":false}}
+  {"ok":true,"data":{"app":"renewal-desk","url":"https://renewal-desk.acme.nimbus-apps.dev","shared_with":["you@acme.com"],"public":false,"visibility":"private","shares_used":0,"shares_limit":5}}
 
   $ nimbus unshare --public
-  {"ok":true,"data":{"app":"renewal-desk","url":"https://renewal-desk.acme.nimbus-apps.dev","shared_with":["you@acme.com"],"public":false}}`,
+  {"ok":true,"data":{"app":"renewal-desk","url":"https://renewal-desk.acme.nimbus-apps.dev","shared_with":["you@acme.com"],"public":false,"visibility":"private","shares_used":0,"shares_limit":5}}`,
 		Args: emailsOrPublic(&public),
 		RunE: a.run(func(ctx context.Context, args []string) (any, error) { return a.updateShares(ctx, args, false, public) }),
 	}
@@ -273,11 +309,14 @@ func emailsOrPublic(public *bool) cobra.PositionalArgs {
 }
 
 type shareResult struct {
-	App        string   `json:"app"`
-	URL        string   `json:"url"`
-	SharedWith []string `json:"shared_with"`
-	Public     bool     `json:"public"`
-	Next       string   `json:"next,omitempty"`
+	App         string   `json:"app"`
+	URL         string   `json:"url"`
+	SharedWith  []string `json:"shared_with"`
+	Public      bool     `json:"public"`
+	Visibility  string   `json:"visibility"`
+	SharesUsed  int      `json:"shares_used"`
+	SharesLimit *int     `json:"shares_limit"`
+	Next        string   `json:"next,omitempty"`
 }
 
 func (r *shareResult) Text() string {
@@ -329,12 +368,13 @@ func (a *App) updateShares(ctx context.Context, emails []string, add, public boo
 	if err != nil {
 		return nil, err
 	}
-	res := &shareResult{App: s.App, URL: s.URL, SharedWith: s.SharedWith, Public: s.Public}
+	res := &shareResult{App: s.App, URL: s.URL, SharedWith: s.SharedWith, Public: s.Public,
+		Visibility: s.Visibility, SharesUsed: s.SharesUsed, SharesLimit: s.SharesLimit}
 	switch {
 	case s.Public:
 		res.Next = "Anyone with the URL can open it, without signing in, and the app gets no X-Viewer-Email. Run `nimbus unshare --public` to require sign-in again."
 	case add:
-		res.Next = "Send them the URL. Nimbus doesn't notify anyone; they open it and sign in with their company account."
+		res.Next = "Send them the URL. Nimbus doesn't notify anyone; they open it and sign in with their Google account."
 	}
 	return res, nil
 }
@@ -416,4 +456,80 @@ type buildLogResult struct {
 
 func (r *buildLogResult) Text() string {
 	return fmt.Sprintf("Build log for %s version %d:\n%s", r.App, r.Version, strings.Join(r.Lines, "\n"))
+}
+
+func (a *App) orgCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "org",
+		Short: "Change your workspace's settings (owner only)",
+		Long: `Change your workspace's settings. Only the workspace owner can, and personal
+spaces have none.`,
+		Args: noArgs,
+		RunE: a.run(func(context.Context, []string) (any, error) {
+			return nil, output.Usage("`nimbus org` needs a setting.", "Run `nimbus org external-sharing on` or `nimbus org external-sharing off`.")
+		}),
+	}
+	cmd.AddCommand(a.externalSharingCmd())
+	return cmd
+}
+
+func (a *App) externalSharingCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "external-sharing on|off",
+		Short: "Let your workspace's apps be shared outside its domain, or stop it",
+		Long: `Owner only. Lets the workspace's apps be shared with addresses outside the
+domain. Turning it off removes those shares, and prints how many.`,
+		Example: `  $ nimbus org external-sharing on
+  {"ok":true,"data":{"org":"acme.com","external_sharing":true,"removed_shares":0}}
+
+  $ nimbus org external-sharing off
+  {"ok":true,"data":{"org":"acme.com","external_sharing":false,"removed_shares":2}}`,
+		Args: onOrOff,
+		RunE: a.run(func(ctx context.Context, args []string) (any, error) {
+			sess, err := a.session()
+			if err != nil {
+				return nil, err
+			}
+			me, err := sess.client.Me(ctx)
+			if err != nil {
+				return nil, err
+			}
+			switch {
+			case me.Org == nil:
+				return nil, output.Errorf("no_org", "Run `nimbus deploy` first: it creates "+firstPlace(me.Domain)+".",
+					"You don't have a workspace yet.")
+			case me.Org.Kind == api.OrgPersonal:
+				return nil, output.Errorf("org_is_personal",
+					"Personal apps can already be shared with any email address, e.g. `nimbus share friend@gmail.com`.",
+					"External sharing is a workspace setting; a personal space always shares outside.")
+			}
+			u, err := sess.client.SetExternalSharing(ctx, strconv.FormatInt(me.Org.ID, 10), args[0] == "on")
+			if err != nil {
+				return nil, err
+			}
+			return &externalSharingResult{Org: u.Org.Key, ExternalSharing: u.Org.ExternalSharing, RemovedShares: u.RemovedShares}, nil
+		}),
+	}
+}
+
+// onOrOff requires exactly one argument, on or off.
+func onOrOff(cmd *cobra.Command, args []string) error {
+	if len(args) == 1 && (args[0] == "on" || args[0] == "off") {
+		return nil
+	}
+	return output.Usage(fmt.Sprintf("`%s` needs on or off.", cmd.CommandPath()),
+		fmt.Sprintf("Usage: `%s`. Run `%s --help` for details.", cmd.UseLine(), cmd.CommandPath()))
+}
+
+type externalSharingResult struct {
+	Org             string `json:"org"`
+	ExternalSharing bool   `json:"external_sharing"`
+	RemovedShares   int    `json:"removed_shares"`
+}
+
+func (r *externalSharingResult) Text() string {
+	if r.ExternalSharing {
+		return fmt.Sprintf("External sharing is on for %s.", r.Org)
+	}
+	return fmt.Sprintf("External sharing is off for %s. Removed %d shares outside %s.", r.Org, r.RemovedShares, r.Org)
 }

@@ -1,7 +1,11 @@
-// Package fakeapi is an in-memory Nimbus control plane for one org. It
-// follows the same API contract as the real server, so the CLI's tests run
-// against it, and `go run ./cmd/nimbus-fakeapi` serves it for trying the CLI
-// by hand.
+// Package fakeapi is an in-memory Nimbus control plane for one user and
+// their org. It follows the same API contract as the real server, so the
+// CLI's tests run against it, and `go run ./cmd/nimbus-fakeapi` serves it for
+// trying the CLI by hand.
+//
+// Like the real server, the user's org doesn't exist until their first
+// deploy: the work workspace of their email's domain, or for a Gmail address
+// a personal space. Every new app is private.
 //
 // Versions move one step through queued → building → deploying → live (or
 // failed) each time a client reads them, so clients have to poll.
@@ -18,6 +22,7 @@ import (
 	"fmt"
 	"html"
 	"io"
+	"maps"
 	"net/http"
 	"regexp"
 	"slices"
@@ -26,12 +31,16 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"go.yaml.in/yaml/v3"
 )
 
 const (
 	maxUpload = 100 << 20
-	// maxPersonalApps is how many apps a personal account can have.
-	maxPersonalApps = 10
+	// Free-plan limits, the same for both kinds of org.
+	appLimit   = 5 // apps per org, public ones included
+	shareLimit = 5 // email shares per app; public isn't one
+	orgID      = 1 // the fake has one org
 )
 
 var nameRE = regexp.MustCompile(`^[a-z]([a-z0-9-]*[a-z0-9])?$`)
@@ -40,25 +49,32 @@ var nameRE = regexp.MustCompile(`^[a-z]([a-z0-9-]*[a-z0-9])?$`)
 // change behavior while serving only through methods.
 type Fake struct {
 	// Email is the user every device login signs in as. Its domain is the
-	// org's domain, unless Personal is set.
+	// account's verified domain and its org's, unless Personal is set.
 	Email string
-	// Personal makes the user's org a personal one, as for a Gmail account:
-	// its slug is u-<local part>, its apps are always public, and it can
-	// have at most 10. New sets it for @gmail.com addresses.
+	// Personal makes the account a personal one, as for a Gmail account: no
+	// verified domain, and a personal space u-<local part> as its org. New
+	// sets it for @gmail.com addresses.
 	Personal bool
+	// Member makes the user a member of their workspace, not its owner.
+	Member bool
+	// DomainNotEnabled refuses approved logins with domain_not_enabled, as
+	// for a work domain that isn't enabled during private testing.
+	DomainNotEnabled bool
 	// AutoApprove approves device codes on their first poll, skipping the browser.
 	AutoApprove bool
 	// AccessTTL is how long access tokens live.
 	AccessTTL time.Duration
 
-	mu        sync.Mutex
-	rejectCLI bool
-	failNext  *VersionError
-	devices   map[string]*device
-	access    map[string]session
-	refresh   map[string]string
-	apps      map[string]*app
-	uploads   map[string]*upload
+	mu              sync.Mutex
+	orgExists       bool // created by the first deploy
+	externalSharing bool
+	rejectCLI       bool
+	failNext        *VersionError
+	devices         map[string]*device
+	access          map[string]session
+	refresh         map[string]string
+	apps            map[string]*app
+	uploads         map[string]*upload
 }
 
 // VersionError is how a version fails: a build or startup error.
@@ -160,12 +176,14 @@ func (f *Fake) SetFailNext(e *VersionError) {
 	f.failNext = e
 }
 
-// AddApp creates an app owned by someone, e.g. to test name_taken.
+// AddApp creates an app in the org, owned by someone, e.g. to test
+// name_taken or the app limit.
 func (f *Fake) AddApp(name, owner string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	now := time.Now()
-	f.apps[name] = &app{name: name, owner: owner, shares: map[string]bool{}, public: f.Personal, created: now, updated: now}
+	f.orgExists = true
+	f.apps[name] = &app{name: name, owner: owner, shares: map[string]bool{}, created: now, updated: now}
 }
 
 // UploadedFiles lists the paths in the most recent tarball sent for an app.
@@ -198,6 +216,7 @@ func (f *Fake) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/apps/{app}/versions/{n}/build-log", f.authed(f.buildLog))
 	mux.HandleFunc("GET /v1/apps/{app}/logs", f.authed(f.logs))
 	mux.HandleFunc("PATCH /v1/apps/{app}/shares", f.authed(f.updateShares))
+	mux.HandleFunc("PATCH /v1/orgs/{id}", f.authed(f.updateOrg))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
@@ -245,6 +264,10 @@ func (f *Fake) token(w http.ResponseWriter, r *http.Request) {
 			oauthErr(w, "access_denied")
 		case !d.approved && !f.AutoApprove:
 			oauthErr(w, "authorization_pending")
+		case f.DomainNotEnabled:
+			delete(f.devices, d.code)
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "domain_not_enabled",
+				"error_description": "nimby is in private testing, and this account's domain isn't enabled yet. Ask to have it enabled."})
 		default:
 			delete(f.devices, d.code)
 			f.issue(w, f.Email)
@@ -338,15 +361,29 @@ func (f *Fake) authed(h func(http.ResponseWriter, *http.Request, string)) http.H
 }
 
 func (f *Fake) me(w http.ResponseWriter, _ *http.Request, email string) {
-	slug, name := f.orgSlug(), email
+	var domain, org any
 	if !f.Personal {
-		name = strings.ToUpper(slug[:1]) + slug[1:]
+		domain = f.domain()
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"email": email,
-		"org":   map[string]any{"slug": slug, "name": name, "personal": f.Personal},
-		"idp":   "google",
-	})
+	if f.orgExists {
+		org = f.orgJSON()
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"email": email, "domain": domain, "org": org, "idp": "google"})
+}
+
+// orgJSON is the Org object of the user's org.
+func (f *Fake) orgJSON() map[string]any {
+	domain, name, role := any(f.domain()), f.domain(), "owner"
+	if f.Personal {
+		domain, name = nil, f.Email
+	}
+	if f.Member {
+		role = "member"
+	}
+	return map[string]any{
+		"id": orgID, "key": f.orgKey(), "slug": f.orgSlug(), "kind": f.orgKind(), "domain": domain, "name": name, "role": role,
+		"external_sharing": f.externalSharing || f.Personal, "plan": "free", "apps_used": len(f.apps), "apps_limit": appLimit,
+	}
 }
 
 func (f *Fake) listApps(w http.ResponseWriter, _ *http.Request, email string) {
@@ -369,6 +406,8 @@ func (f *Fake) listApps(w http.ResponseWriter, _ *http.Request, email string) {
 	writeJSON(w, http.StatusOK, map[string]any{"apps": list})
 }
 
+// ensureApp is the deploy handler: it checks the org pinned in nimbus.yaml,
+// creates the user's org on their first deploy, then the app if it's new.
 func (f *Fake) ensureApp(w http.ResponseWriter, r *http.Request, email string) {
 	name := r.PathValue("app")
 	if len(name) < 3 || len(name) > 40 || !nameRE.MatchString(name) {
@@ -376,6 +415,17 @@ func (f *Fake) ensureApp(w http.ResponseWriter, r *http.Request, email string) {
 			"Use 3–40 lowercase letters, digits and hyphens, starting with a letter.", nil)
 		return
 	}
+	var in struct {
+		Org string `json:"org"`
+	}
+	if r.ContentLength != 0 && !readJSON(w, r, &in) {
+		return
+	}
+	if in.Org != "" && !f.pinMatches(in.Org) {
+		f.wrongAccount(w, in.Org, email)
+		return
+	}
+	f.orgExists = true
 	if a, ok := f.apps[name]; ok {
 		if a.owner != email {
 			writeErr(w, http.StatusConflict, "name_taken", fmt.Sprintf("Someone else in your org already has an app called %q.", name),
@@ -385,21 +435,15 @@ func (f *Fake) ensureApp(w http.ResponseWriter, r *http.Request, email string) {
 		writeJSON(w, http.StatusOK, f.appJSON(a))
 		return
 	}
-	if f.Personal {
-		n := 0
-		for _, a := range f.apps {
-			if a.owner == email {
-				n++
-			}
-		}
-		if n >= maxPersonalApps {
-			writeErr(w, http.StatusForbidden, "app_limit", fmt.Sprintf("A personal account can have at most %d apps.", maxPersonalApps),
-				"Tell the user they've reached the limit for personal projects.", nil)
-			return
-		}
+	if len(f.apps) >= appLimit {
+		writeErr(w, http.StatusForbidden, "app_limit",
+			fmt.Sprintf("This workspace has %d apps, the free limit. Delete one with `nimbus destroy <app>` or upgrade.", appLimit),
+			"Delete one with `nimbus destroy <app>` or upgrade. `nimbus list` shows your apps, and `nimbus deploy --app <name>` redeploys one instead.",
+			map[string]any{"apps_used": len(f.apps), "apps_limit": appLimit})
+		return
 	}
 	now := time.Now()
-	a := &app{name: name, owner: email, shares: map[string]bool{}, public: f.Personal, created: now, updated: now}
+	a := &app{name: name, owner: email, shares: map[string]bool{}, created: now, updated: now}
 	f.apps[name] = a
 	writeJSON(w, http.StatusCreated, f.appJSON(a))
 }
@@ -495,6 +539,10 @@ func (f *Fake) createVersion(w http.ResponseWriter, r *http.Request, email strin
 		writeErr(w, http.StatusUnprocessableEntity, "invalid_manifest", "The upload has no nimbus.yaml.", "Run `nimbus deploy` from the app's directory.", nil)
 		return
 	}
+	if pinned := uploadedOrg(u.data); pinned != "" && !f.pinMatches(pinned) {
+		f.wrongAccount(w, pinned, email)
+		return
+	}
 	if live := a.live(); live != nil && live.sha == u.sha {
 		writeJSON(w, http.StatusOK, map[string]any{"version": versionJSON(live), "unchanged": true})
 		return
@@ -582,11 +630,6 @@ func (f *Fake) updateShares(w http.ResponseWriter, r *http.Request, email string
 		return out
 	}
 	add, remove := norm(in.Add), norm(in.Remove)
-	if f.Personal && (len(add) > 0 || len(remove) > 0 || in.Public != nil && !*in.Public) {
-		writeErr(w, http.StatusUnprocessableEntity, "personal_app", "Personal projects are always public: anyone with the URL can open them.",
-			"Sharing by email and private apps are for work projects. Send people the URL instead.", nil)
-		return
-	}
 	var invalid, outside []string
 	for _, e := range append(slices.Clone(add), remove...) {
 		local, domain, ok := strings.Cut(e, "@")
@@ -600,18 +643,35 @@ func (f *Fake) updateShares(w http.ResponseWriter, r *http.Request, email string
 		return
 	}
 	for _, e := range add {
-		if !strings.HasSuffix(e, "@"+f.domain()) {
+		if !f.Personal && !f.externalSharing && !strings.HasSuffix(e, "@"+f.domain()) {
 			outside = append(outside, e)
 		}
 	}
 	if len(outside) > 0 {
-		writeErr(w, http.StatusUnprocessableEntity, "share_outside_org",
-			fmt.Sprintf("These addresses aren't in your org (%s): %s.", f.domain(), strings.Join(outside, ", ")),
-			"Nimbus v0.1 only shares inside your org.", map[string]any{"emails": outside})
+		writeErr(w, http.StatusUnprocessableEntity, "external_sharing_disabled",
+			fmt.Sprintf("The %s workspace only shares inside the domain, and these addresses are outside it: %s.", f.domain(), strings.Join(outside, ", ")),
+			"Share with @"+f.domain()+" addresses, or the workspace owner can enable external sharing with `nimbus org external-sharing on`.",
+			map[string]any{"emails": outside})
 		return
 	}
 	if slices.Contains(remove, a.owner) {
 		writeErr(w, http.StatusUnprocessableEntity, "cannot_unshare_owner", "The owner always has access.", "Leave the owner out of `nimbus unshare`.", nil)
+		return
+	}
+	after := maps.Clone(a.shares)
+	for _, e := range add {
+		if e != a.owner {
+			after[e] = true
+		}
+	}
+	for _, e := range remove {
+		delete(after, e)
+	}
+	if len(after) > shareLimit && len(after) > len(a.shares) {
+		writeErr(w, http.StatusForbidden, "share_limit",
+			fmt.Sprintf("An app can be shared with %d people on the free plan, and this one has %d.", shareLimit, len(a.shares)),
+			"Remove someone with `nimbus unshare <email>`, or use `nimbus share --public`, which doesn't count.",
+			map[string]any{"shares_used": len(a.shares), "shares_limit": shareLimit})
 		return
 	}
 	for _, e := range add {
@@ -626,7 +686,96 @@ func (f *Fake) updateShares(w http.ResponseWriter, r *http.Request, email string
 		a.public = *in.Public
 	}
 	a.updated = time.Now()
-	writeJSON(w, http.StatusOK, map[string]any{"app": a.name, "url": f.appURL(a), "shared_with": a.sharedWith(), "public": a.public})
+	writeJSON(w, http.StatusOK, map[string]any{"app": a.name, "url": f.appURL(a), "shared_with": a.sharedWith(), "public": a.public,
+		"visibility": a.visibility(), "shares_used": len(a.shares), "shares_limit": shareLimit})
+}
+
+// updateOrg is PATCH /v1/orgs/{id}: external sharing, owner of a work org only.
+// Turning it off deletes the shares outside the domain.
+func (f *Fake) updateOrg(w http.ResponseWriter, r *http.Request, _ string) {
+	id := r.PathValue("id")
+	if !f.orgExists || id != strconv.Itoa(orgID) && id != f.orgSlug() {
+		writeErr(w, http.StatusNotFound, "org_not_found", fmt.Sprintf("No workspace %q.", id), "Run `nimbus whoami` to see your workspace.", nil)
+		return
+	}
+	var in struct {
+		ExternalSharing *bool `json:"external_sharing"`
+	}
+	if !readJSON(w, r, &in) {
+		return
+	}
+	switch {
+	case in.ExternalSharing == nil:
+		writeErr(w, http.StatusUnprocessableEntity, "invalid_request", "The request has no external_sharing.", `Send {"external_sharing": true} or false.`, nil)
+		return
+	case f.Personal:
+		writeErr(w, http.StatusUnprocessableEntity, "org_is_personal", "External sharing is a workspace setting; a personal space always shares outside.",
+			"Personal apps can already be shared with any email address, e.g. `nimbus share friend@gmail.com`.", nil)
+		return
+	case f.Member:
+		writeErr(w, http.StatusForbidden, "not_org_owner", fmt.Sprintf("Only the owner of the %s workspace can change external sharing.", f.domain()),
+			"Ask the workspace owner to run `nimbus org external-sharing`.", nil)
+		return
+	}
+	f.externalSharing = *in.ExternalSharing
+	removed := 0
+	if !f.externalSharing {
+		for _, a := range f.apps {
+			for e := range a.shares {
+				if !strings.HasSuffix(e, "@"+f.domain()) {
+					delete(a.shares, e)
+					removed++
+				}
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"org": f.orgJSON(), "removed_shares": removed})
+}
+
+// pinMatches reports whether nimbus.yaml's org: names the user's org. Before
+// the first deploy, a work account's org is its domain, and a personal
+// space, which doesn't exist yet, matches no pin.
+func (f *Fake) pinMatches(pinned string) bool {
+	key := f.orgKey()
+	if !f.orgExists && f.Personal {
+		key = ""
+	}
+	return strings.EqualFold(strings.TrimSpace(pinned), key)
+}
+
+func (f *Fake) wrongAccount(w http.ResponseWriter, pinned, email string) {
+	mine, accountOrg := f.orgKey(), f.orgKey()
+	if !f.orgExists && f.Personal {
+		mine, accountOrg = "personal", ""
+	}
+	writeErr(w, http.StatusConflict, "wrong_account",
+		fmt.Sprintf("This app belongs to %s. You're signed in as %s (%s).", pinned, email, mine),
+		"Run `nimbus login` to switch accounts, or remove `org:` from nimbus.yaml to deploy a separate copy here.",
+		map[string]any{"app_org": pinned, "account_org": accountOrg, "email": email})
+}
+
+// uploadedOrg is the org: in a tarball's nimbus.yaml, or "".
+func uploadedOrg(data []byte) string {
+	gz, err := gzip.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return ""
+	}
+	tr := tar.NewReader(gz)
+	for {
+		h, err := tr.Next()
+		if err != nil {
+			return ""
+		}
+		if h.Name != "nimbus.yaml" {
+			continue
+		}
+		var m struct {
+			Org string `yaml:"org"`
+		}
+		b, _ := io.ReadAll(tr)
+		_ = yaml.Unmarshal(b, &m)
+		return strings.ToLower(strings.TrimSpace(m.Org))
+	}
 }
 
 // ownedApp finds an app the caller owns. Like the real server, it answers
@@ -701,6 +850,16 @@ func (a *app) state() string {
 	return "live"
 }
 
+func (a *app) visibility() string {
+	switch {
+	case a.public:
+		return "public"
+	case len(a.shares) > 0:
+		return "shared"
+	}
+	return "private"
+}
+
 // sharedWith lists everyone with access, owner first.
 func (a *app) sharedWith() []string {
 	var others []string
@@ -728,6 +887,13 @@ func (f *Fake) appJSON(a *app) map[string]any {
 		"latest_version": latest,
 		"shared_with":    a.sharedWith(),
 		"public":         a.public,
+		"org":            f.orgKey(),
+		"org_kind":       f.orgKind(),
+		"visibility":     a.visibility(),
+		"shares_used":    len(a.shares),
+		"shares_limit":   shareLimit,
+		"apps_used":      len(f.apps),
+		"apps_limit":     appLimit,
 		"created_at":     a.created,
 		"updated_at":     a.updated,
 	}
@@ -750,18 +916,41 @@ func (f *Fake) appURL(a *app) string {
 }
 
 func (f *Fake) domain() string {
-	_, d, _ := strings.Cut(f.Email, "@")
+	_, d, _ := strings.Cut(strings.ToLower(f.Email), "@")
 	return d
 }
 
+// orgSlug is the org's part of app URLs: the domain minus its TLD for a
+// workspace (acme.com → acme), and u- with the email's local part, dots
+// dropped, for a personal space (j.doe@gmail.com → u-jdoe).
 func (f *Fake) orgSlug() string {
 	if f.Personal {
-		local, _, _ := strings.Cut(f.Email, "@")
-		return "u-" + strings.NewReplacer(".", "-", "_", "-", "+", "-").Replace(local)
+		local, _, _ := strings.Cut(strings.ToLower(f.Email), "@")
+		return "u-" + slugify(strings.ReplaceAll(local, ".", ""))
 	}
-	s, _, _ := strings.Cut(f.domain(), ".")
-	return s
+	labels := strings.Split(f.domain(), ".")
+	return slugify(strings.Join(labels[:max(len(labels)-1, 1)], "-"))
 }
+
+func (f *Fake) orgKind() string {
+	if f.Personal {
+		return "personal"
+	}
+	return "work"
+}
+
+// orgKey is how nimbus.yaml's org: names the org: the domain of a
+// workspace, the slug of a personal space.
+func (f *Fake) orgKey() string {
+	if f.Personal {
+		return f.orgSlug()
+	}
+	return f.domain()
+}
+
+var nonLabel = regexp.MustCompile(`[^a-z0-9]+`)
+
+func slugify(s string) string { return strings.Trim(nonLabel.ReplaceAllString(s, "-"), "-") }
 
 func tarFiles(data []byte) ([]string, error) {
 	gz, err := gzip.NewReader(bytes.NewReader(data))

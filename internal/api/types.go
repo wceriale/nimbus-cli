@@ -35,16 +35,34 @@ func (e *OAuthError) Error() string {
 
 type Me struct {
 	Email string `json:"email"`
-	Org   Org    `json:"org"`
-	IdP   string `json:"idp"`
+	// Domain is the verified domain the identity provider vouches for, ""
+	// for an account without one, such as Gmail.
+	Domain string `json:"domain"`
+	// Org is nil until the account's first deploy creates its org, or, for a
+	// work account, until someone from its domain has deployed.
+	Org *Org   `json:"org"`
+	IdP string `json:"idp"`
 }
 
+// Org kinds.
+const (
+	OrgPersonal = "personal"
+	OrgWork     = "work"
+)
+
+// Org is a workspace (a work domain) or a personal space.
 type Org struct {
-	Slug string `json:"slug"`
-	Name string `json:"name"`
-	// Personal is a personal Google account's own org, whose apps are always
-	// public. Servers from before personal accounts leave it out.
-	Personal bool `json:"personal"`
+	ID              int64  `json:"id"`
+	Key             string `json:"key"` // what nimbus.yaml's org: holds: the domain (work) or the slug (personal)
+	Slug            string `json:"slug"`
+	Kind            string `json:"kind"`   // personal or work
+	Domain          string `json:"domain"` // "" for a personal org
+	Name            string `json:"name"`
+	Role            string `json:"role"` // owner or member
+	ExternalSharing bool   `json:"external_sharing"`
+	Plan            string `json:"plan"`
+	AppsUsed        int    `json:"apps_used"`
+	AppsLimit       *int   `json:"apps_limit"` // nil when there's no limit
 }
 
 // App states: new, building, live, failed.
@@ -57,6 +75,13 @@ type App struct {
 	LatestVersion *int      `json:"latest_version"`
 	SharedWith    []string  `json:"shared_with"`
 	Public        bool      `json:"public"`
+	Org           string    `json:"org"`        // the org's key, as nimbus.yaml's org: holds it
+	OrgKind       string    `json:"org_kind"`   // personal or work
+	Visibility    string    `json:"visibility"` // private, shared, or public
+	SharesUsed    int       `json:"shares_used"`
+	SharesLimit   *int      `json:"shares_limit"` // nil when there's no limit
+	AppsUsed      int       `json:"apps_used"`    // apps in the org, this one included
+	AppsLimit     *int      `json:"apps_limit"`
 	CreatedAt     time.Time `json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
 }
@@ -104,8 +129,17 @@ type Logs struct {
 }
 
 type Shares struct {
-	App        string   `json:"app"`
-	URL        string   `json:"url"`
-	SharedWith []string `json:"shared_with"`
-	Public     bool     `json:"public"`
+	App         string   `json:"app"`
+	URL         string   `json:"url"`
+	SharedWith  []string `json:"shared_with"`
+	Public      bool     `json:"public"`
+	Visibility  string   `json:"visibility"`
+	SharesUsed  int      `json:"shares_used"`
+	SharesLimit *int     `json:"shares_limit"`
+}
+
+// OrgUpdate is the answer to a change of an org's settings.
+type OrgUpdate struct {
+	Org           Org `json:"org"`
+	RemovedShares int `json:"removed_shares"`
 }
