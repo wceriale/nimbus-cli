@@ -531,5 +531,9 @@ func (r *externalSharingResult) Text() string {
 	if r.ExternalSharing {
 		return fmt.Sprintf("External sharing is on for %s.", r.Org)
 	}
-	return fmt.Sprintf("External sharing is off for %s. Removed %d shares outside %s.", r.Org, r.RemovedShares, r.Org)
+	shares := fmt.Sprintf("%d shares", r.RemovedShares)
+	if r.RemovedShares == 1 {
+		shares = "1 share"
+	}
+	return fmt.Sprintf("External sharing is off for %s. Removed %s outside %s.", r.Org, shares, r.Org)
 }
