@@ -51,8 +51,8 @@ type Fake struct {
 	// Email is the user every device login signs in as. Its domain is the
 	// account's verified domain and its org's, unless Personal is set.
 	Email string
-	// Personal makes the account a personal one, as for a Gmail account: no
-	// verified domain, and a personal space u-<local part> as its org. New
+	// Personal makes the account a personal one, like Gmail's, with no
+	// verified domain and a personal space u-<local part> as its org. New
 	// sets it for @gmail.com addresses.
 	Personal bool
 	// Member makes the user a member of their workspace, not its owner.

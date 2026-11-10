@@ -132,7 +132,7 @@ func TestSetOrg(t *testing.T) {
 	for before, want := range map[string]string{
 		"name: planner\nacc" + "ount: personal\nport: 5000\n": "name: planner\nport: 5000\norg: u-you\n",
 		"name: planner\nacc" + "ount: work":                   "name: planner\norg: u-you\n",
-		"# account: is a comment\nname: planner\n":            "# account: is a comment\nname: planner\norg: u-you\n",
+		"# acc" + "ount: in a comment\nname: planner\n":       "# acc" + "ount: in a comment\nname: planner\norg: u-you\n",
 	} {
 		dir := t.TempDir()
 		if err := os.WriteFile(filepath.Join(dir, FileName), []byte(before), 0o644); err != nil {
