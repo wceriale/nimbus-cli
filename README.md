@@ -1,8 +1,6 @@
 # Nimbus CLI
 
-`nimbus` takes a web app your agent already wrote and runs it at a URL. Every app starts private, behind Google sign-in: you share it by email, or make it public, and the app always knows who's viewing it, so it never needs its own login. Apps from your work account go into your company's workspace; apps from a personal account, such as Gmail, go into your personal space.
-
-> **Status: early access (v0.0.x).** Nimbus is live at `api.nimby.run`. People sign in with Google. During private testing, a work domain has to be enabled before its people can sign in; personal accounts, such as Gmail, always can. The free plan has 5 apps per workspace or personal space, and 5 people per app. Progress and spec: [DESIGN.md](DESIGN.md).
+`nimbus` takes an app your agent already wrote and runs it at a URL. Every app starts private, behind Google sign-in: you share it by email, or make it public.
 
 ## For agents
 Install:
