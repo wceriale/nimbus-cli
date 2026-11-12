@@ -1,6 +1,9 @@
 package api
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // DeviceCode starts a device-flow login (RFC 8628 §3.2).
 type DeviceCode struct {
@@ -142,4 +145,28 @@ type Shares struct {
 type OrgUpdate struct {
 	Org           Org `json:"org"`
 	RemovedShares int `json:"removed_shares"`
+}
+
+// Connector is an org's setting for an outside data source that its apps
+// read as the viewer (the server's API.md #18–21).
+type Connector struct {
+	Name      string          `json:"name"`
+	Driver    string          `json:"driver"`  // e.g. postgres
+	Auth      string          `json:"auth"`    // viewer: each viewer logs in as themselves
+	Network   string          `json:"network"` // private or public
+	ReadOnly  bool            `json:"read_only"`
+	Config    json.RawMessage `json:"config"`               // driver-specific; never a secret
+	AllowFrom []string        `json:"allow_from,omitempty"` // public network: Nimbus's IPs to allowlist
+	CreatedBy string          `json:"created_by"`
+	CreatedAt time.Time       `json:"created_at"`
+	UpdatedAt time.Time       `json:"updated_at"`
+}
+
+// ConnectorInput is a PUT body: only the fields given are sent, and the
+// server fills in defaults.
+type ConnectorInput struct {
+	Driver  string         `json:"driver"`
+	Auth    string         `json:"auth,omitempty"`
+	Network string         `json:"network,omitempty"`
+	Config  map[string]any `json:"config"`
 }

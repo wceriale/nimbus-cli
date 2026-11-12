@@ -75,6 +75,17 @@ type Fake struct {
 	refresh         map[string]string
 	apps            map[string]*app
 	uploads         map[string]*upload
+	connectors      map[string]*connector
+}
+
+// EgressIP is the address a public connector tells the owner to allowlist.
+const EgressIP = "203.0.113.7"
+
+type connector struct {
+	name, driver, network string
+	config                map[string]any
+	createdBy             string
+	created, updated      time.Time
 }
 
 // VersionError is how a version fails: a build or startup error.
@@ -217,6 +228,10 @@ func (f *Fake) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/apps/{app}/logs", f.authed(f.logs))
 	mux.HandleFunc("PATCH /v1/apps/{app}/shares", f.authed(f.updateShares))
 	mux.HandleFunc("PATCH /v1/orgs/{id}", f.authed(f.updateOrg))
+	mux.HandleFunc("GET /v1/orgs/{id}/connectors", f.authed(f.listConnectors))
+	mux.HandleFunc("GET /v1/orgs/{id}/connectors/{name}", f.authed(f.getConnector))
+	mux.HandleFunc("PUT /v1/orgs/{id}/connectors/{name}", f.authed(f.putConnector))
+	mux.HandleFunc("DELETE /v1/orgs/{id}/connectors/{name}", f.authed(f.deleteConnector))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
@@ -542,6 +557,14 @@ func (f *Fake) createVersion(w http.ResponseWriter, r *http.Request, email strin
 	if pinned := uploadedOrg(u.data); pinned != "" && !f.pinMatches(pinned) {
 		f.wrongAccount(w, pinned, email)
 		return
+	}
+	for _, name := range uploadedConnectors(u.data) {
+		if f.connectors[name] == nil {
+			writeErr(w, http.StatusUnprocessableEntity, "unknown_connector",
+				fmt.Sprintf("nimbus.yaml declares the connector %q, but the workspace has none by that name.", name),
+				"Run `nimbus connector list` to see the workspace's connectors, or ask its owner to add it.", nil)
+			return
+		}
 	}
 	if live := a.live(); live != nil && live.sha == u.sha {
 		writeJSON(w, http.StatusOK, map[string]any{"version": versionJSON(live), "unchanged": true})
@@ -1014,4 +1037,201 @@ func userCode() string {
 		b[i] = letters[int(b[i])%len(letters)]
 	}
 	return string(b[:4]) + "-" + string(b[4:])
+}
+
+// Data connectors (the server's API.md #18–21), with the server's rules.
+
+func (f *Fake) connectorOrg(w http.ResponseWriter, r *http.Request) bool {
+	id := r.PathValue("id")
+	if !f.orgExists || id != strconv.Itoa(orgID) && id != f.orgSlug() {
+		writeErr(w, http.StatusNotFound, "org_not_found", fmt.Sprintf("No workspace %q.", id), "Run `nimbus whoami` to see your workspace.", nil)
+		return false
+	}
+	return true
+}
+
+func (f *Fake) connectorJSON(c *connector) map[string]any {
+	j := map[string]any{
+		"name": c.name, "driver": c.driver, "auth": "viewer", "network": c.network, "read_only": true,
+		"config": c.config, "created_by": c.createdBy,
+		"created_at": c.created.UTC().Format(time.RFC3339Nano), "updated_at": c.updated.UTC().Format(time.RFC3339Nano),
+	}
+	if c.network == "public" {
+		j["allow_from"] = []string{EgressIP}
+	}
+	return j
+}
+
+func (f *Fake) listConnectors(w http.ResponseWriter, r *http.Request, _ string) {
+	if !f.connectorOrg(w, r) {
+		return
+	}
+	names := slices.Sorted(maps.Keys(f.connectors))
+	list := make([]map[string]any, 0, len(names))
+	for _, n := range names {
+		list = append(list, f.connectorJSON(f.connectors[n]))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"connectors": list})
+}
+
+func (f *Fake) getConnector(w http.ResponseWriter, r *http.Request, _ string) {
+	if !f.connectorOrg(w, r) {
+		return
+	}
+	c := f.connectors[strings.ToLower(r.PathValue("name"))]
+	if c == nil {
+		connectorNotFound(w, r.PathValue("name"))
+		return
+	}
+	writeJSON(w, http.StatusOK, f.connectorJSON(c))
+}
+
+func connectorNotFound(w http.ResponseWriter, name string) {
+	writeErr(w, http.StatusNotFound, "connector_not_found", fmt.Sprintf("No connector called %q.", name),
+		"Run `nimbus connector list` to see your workspace's connectors.", nil)
+}
+
+func (f *Fake) ownerOnly(w http.ResponseWriter) bool {
+	if f.Member {
+		writeErr(w, http.StatusForbidden, "not_org_owner", fmt.Sprintf("Only the owner of the %s workspace can change its connectors.", f.domain()),
+			"Ask the workspace owner to run it.", nil)
+		return false
+	}
+	return true
+}
+
+func (f *Fake) putConnector(w http.ResponseWriter, r *http.Request, email string) {
+	if !f.connectorOrg(w, r) || !f.ownerOnly(w) {
+		return
+	}
+	name := r.PathValue("name")
+	if !connectorName.MatchString(name) || len(name) < 3 || len(name) > 40 {
+		writeErr(w, http.StatusUnprocessableEntity, "invalid_name", fmt.Sprintf("%q isn't a valid connector name.", name),
+			"Use 3–40 lowercase letters, digits and hyphens, starting with a letter, e.g. `nimbus connector add warehouse`.", nil)
+		return
+	}
+	var in struct {
+		Driver  string         `json:"driver"`
+		Auth    string         `json:"auth"`
+		Network string         `json:"network"`
+		Config  map[string]any `json:"config"`
+	}
+	if !readJSON(w, r, &in) {
+		return
+	}
+	bad := func(field, message, hint string) {
+		var d map[string]any
+		if field != "" {
+			d = map[string]any{"field": field}
+		}
+		writeErr(w, http.StatusUnprocessableEntity, "invalid_connector_config", message, hint, d)
+	}
+	switch {
+	case in.Driver != "postgres":
+		writeErr(w, http.StatusUnprocessableEntity, "unsupported_driver", fmt.Sprintf("Nimbus can't connect to %q data sources.", in.Driver),
+			"Set `driver` to one of: postgres.", map[string]any{"drivers": []string{"postgres"}})
+		return
+	case in.Auth != "" && in.Auth != "viewer":
+		writeErr(w, http.StatusUnprocessableEntity, "unsupported_auth", fmt.Sprintf("Connectors can't log in with %q.", in.Auth),
+			"Set `auth` to one of: viewer.", map[string]any{"auth_modes": []string{"viewer"}})
+		return
+	case in.Network != "" && in.Network != "private" && in.Network != "public":
+		writeErr(w, http.StatusUnprocessableEntity, "unsupported_network", fmt.Sprintf("Connectors can't reach a data source over %q.", in.Network),
+			"Set `network` to one of: private, public.", map[string]any{"networks": []string{"private", "public"}})
+		return
+	}
+	if in.Network == "" {
+		in.Network = "private"
+	}
+	cfg := in.Config
+	for _, k := range []string{"user", "username", "password"} {
+		if _, ok := cfg[k]; ok {
+			bad(k, fmt.Sprintf("A connector can't hold a credential, and the config has `%s`.", k),
+				"Leave it out: each viewer's query logs in as that viewer, so a connector needs no shared login.")
+			return
+		}
+	}
+	host, _ := cfg["host"].(string)
+	db, _ := cfg["database"].(string)
+	switch {
+	case host == "":
+		bad("host", "The config has no `host`.", "Set `host` to the database's IP address or hostname, e.g. 10.0.0.5.")
+		return
+	case db == "":
+		bad("database", "The config has no `database`.", "Set `database` to the name of the database to read.")
+		return
+	}
+	if _, ok := cfg["port"]; !ok {
+		cfg["port"] = 5432
+	}
+	sslmode, _ := cfg["sslmode"].(string)
+	if sslmode == "" {
+		sslmode = "verify-full"
+		cfg["sslmode"] = sslmode
+	}
+	ca, _ := cfg["server_ca"].(string)
+	switch {
+	case in.Network == "public" && sslmode == "require":
+		bad("sslmode", "`sslmode` \"require\" doesn't verify the server, and a public network needs that.",
+			"Use verify-ca with the server's CA certificate (`server_ca`), or verify-full.")
+		return
+	case sslmode == "verify-ca" && ca == "":
+		bad("server_ca", "`sslmode` verify-ca needs the server's CA certificate.",
+			"Add the server's CA certificate as `server_ca` (for Cloud SQL: `gcloud sql ssl server-ca-certs list`).")
+		return
+	case ca != "" && !strings.Contains(ca, "BEGIN CERTIFICATE"):
+		bad("server_ca", "`server_ca` isn't a PEM certificate.", "Paste the CA certificate in PEM form.")
+		return
+	}
+	if f.connectors == nil {
+		f.connectors = map[string]*connector{}
+	}
+	now, status := time.Now(), http.StatusOK
+	c := f.connectors[name]
+	if c == nil {
+		c = &connector{name: name, created: now, createdBy: email}
+		f.connectors[name] = c
+		status = http.StatusCreated
+	}
+	c.driver, c.network, c.config, c.updated = in.Driver, in.Network, cfg, now
+	writeJSON(w, status, f.connectorJSON(c))
+}
+
+func (f *Fake) deleteConnector(w http.ResponseWriter, r *http.Request, _ string) {
+	if !f.connectorOrg(w, r) || !f.ownerOnly(w) {
+		return
+	}
+	name := strings.ToLower(r.PathValue("name"))
+	if f.connectors[name] == nil {
+		connectorNotFound(w, name)
+		return
+	}
+	delete(f.connectors, name)
+	writeJSON(w, http.StatusOK, map[string]any{"name": name, "deleted": true})
+}
+
+var connectorName = regexp.MustCompile(`^[a-z]([a-z0-9-]*[a-z0-9])?$`)
+
+// uploadedConnectors is the connectors: list in a tarball's nimbus.yaml.
+func uploadedConnectors(data []byte) []string {
+	gz, err := gzip.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return nil
+	}
+	tr := tar.NewReader(gz)
+	for {
+		h, err := tr.Next()
+		if err != nil {
+			return nil
+		}
+		if h.Name != "nimbus.yaml" {
+			continue
+		}
+		var m struct {
+			Connectors []string `yaml:"connectors"`
+		}
+		b, _ := io.ReadAll(tr)
+		_ = yaml.Unmarshal(b, &m)
+		return m.Connectors
+	}
 }

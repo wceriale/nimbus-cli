@@ -235,6 +235,41 @@ func (c *Client) SetExternalSharing(ctx context.Context, id string, on bool) (*O
 	return &u, nil
 }
 
+// Connectors lists the org's data connectors (API #18).
+func (c *Client) Connectors(ctx context.Context, orgID string) ([]Connector, error) {
+	var out struct {
+		Connectors []Connector `json:"connectors"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/v1/orgs/"+url.PathEscape(orgID)+"/connectors", nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Connectors, nil
+}
+
+// GetConnector returns one connector (API #19).
+func (c *Client) GetConnector(ctx context.Context, orgID, name string) (*Connector, error) {
+	var out Connector
+	if err := c.do(ctx, http.MethodGet, "/v1/orgs/"+url.PathEscape(orgID)+"/connectors/"+url.PathEscape(name), nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// PutConnector creates or replaces a connector (API #20). A new one has
+// CreatedAt equal to UpdatedAt.
+func (c *Client) PutConnector(ctx context.Context, orgID, name string, in ConnectorInput) (*Connector, error) {
+	var out Connector
+	if err := c.do(ctx, http.MethodPut, "/v1/orgs/"+url.PathEscape(orgID)+"/connectors/"+url.PathEscape(name), in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// DeleteConnector removes a connector (API #21).
+func (c *Client) DeleteConnector(ctx context.Context, orgID, name string) error {
+	return c.do(ctx, http.MethodDelete, "/v1/orgs/"+url.PathEscape(orgID)+"/connectors/"+url.PathEscape(name), nil, nil)
+}
+
 // do sends a JSON request to a /v1 endpoint. On a 401 it retries once with a
 // freshly refreshed token.
 func (c *Client) do(ctx context.Context, method, path string, in, out any) error {

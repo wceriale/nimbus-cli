@@ -58,6 +58,7 @@ P0 is needed for the first end-to-end deploy. P1 must land before anyone outside
 | 17 | `nimbus share --org` (anyone in the org who has the link) | P1 | todo |
 | 25 | `nimbus share --public` / `unshare --public` (anyone on the internet, no sign-in) | P1 | done |
 | 26 | Accounts and orgs: the login decides the org, deploy pins `org:` in `nimbus.yaml`, `wrong_account` from the server, free-plan limits, `nimbus org external-sharing on\|off` | P1 | done |
+| 27 | Data connectors: `nimbus connector list\|show\|add\|remove`, `connectors:` in `nimbus.yaml`, agent docs for querying through the gateway | P1 | done |
 | 20 | CI check that the guide's examples still run | P1 | todo |
 | 18 | `scopes` in the manifest, plus consent errors | v0.2 | todo |
 
@@ -94,6 +95,11 @@ nimbus status [app]        URL, version, state (building|live|failed), who has a
 nimbus logs [app]          runtime logs: --since 1h --limit 200; --build for the last build log
 nimbus list                apps you own
 nimbus org external-sharing on|off   owner only: let a workspace's apps be shared outside its domain
+nimbus connector list      the workspace's data connectors (any member)
+nimbus connector show <name>
+nimbus connector add <name> --host <addr> --database <db> [--network private|public] [--port] [--sslmode] [--server-ca-file]
+                           owner only: add or replace a connector; queries log in as each viewer, so no user or password
+nimbus connector remove <name>   owner only
 nimbus docs                the agent guide, printed as markdown
 ```
 - **Global flags:** `--json`, `--app <name>` (defaults to `name` in `./nimbus.yaml`), `--help`, `--version`.
@@ -176,6 +182,9 @@ nimbus docs                the agent guide, printed as markdown
 | `app_limit` | The org has 5 apps, the free limit | Tell the user |
 | `share_limit` | The app is shared with 5 people, the free limit | Tell the user; `--public` doesn't count |
 | `external_sharing_disabled` | A work app, an address outside the domain | Share inside it, or ask the owner to run `nimbus org external-sharing on` |
+| `unknown_connector` | `nimbus.yaml` lists a connector the workspace doesn't have | `nimbus connector list`, or ask the owner to add it |
+| `connector_not_found` | No connector by that name | `nimbus connector list` |
+| `invalid_connector_config`, `unsupported_driver`, `unsupported_network`, `unsupported_auth` | `nimbus connector add` with a bad setting; `details.field` names the config field | Fix it and run `nimbus connector add` again |
 | `no_org`, `org_is_personal`, `not_org_owner`, `org_not_found` | `nimbus org` without a workspace, on a personal space, or not as its owner | Tell the user |
 | `api_url_not_set`, `invalid_api_url` | No usable `NIMBUS_API_URL` | Set it |
 | `cli_outdated` | The server requires a newer CLI | Re-run the install one-liner |
@@ -198,8 +207,9 @@ This is the whole file in v0.1:
 name: renewal-desk      # required; becomes renewal-desk.<org>.<apps-domain>
 port: 8080              # optional; the app receives it as $PORT
 org: acme.com           # written by the first deploy: the workspace's domain, or a personal space like u-you
+connectors: [warehouse] # optional: the workspace's data connectors the app reads
 ```
-The app's `Dockerfile` defines its runtime, and sharing is a command. `scopes` returns with connectors in v0.2.
+The app's `Dockerfile` defines its runtime, and sharing is a command. `connectors` names connectors the workspace owner set up (`nimbus connector add`); the server refuses a deploy naming one that doesn't exist (`unknown_connector`).
 
 ## The app contract
 Without docs, this is what agents get wrong, so `nimbus docs` opens with it.
@@ -212,6 +222,7 @@ Without docs, this is what agents get wrong, so `nimbus docs` opens with it.
 7. Each app runs as a single instance. It sleeps after 15 minutes without requests or open WebSockets (SIGTERM, then 10 seconds to exit), and the next request wakes it in a second or two. When a viewer's sign-in has expired, page loads are sent to sign in, but `fetch` calls get `401 {"error":"not_signed_in"}`, so the app can reload the page.
 8. WebSockets work when opened from the app's own pages, and should reconnect when they close. Other requests time out after 5 minutes.
 9. The running app has no outbound internet. The build does, so `npm install` and `pip install` work, but the app can't call outside APIs. Requests the viewer's browser makes (CDNs, fonts) aren't affected.
+10. To read a database, the app declares a connector and queries `$NIMBUS_GATEWAY_URL/v1/query` from its server with the request's `X-Viewer-Token`. Each query runs as the viewer, read-only. `nimbus docs` has the helper code and errors.
 
 ## Docs for agents
 Everything comes from one source and is published in several places:
@@ -258,6 +269,10 @@ GET    /v1/apps/{app}/versions/{n|latest}       deploy polling, status
 GET    /v1/apps/{app}/versions/{n}/build-log    logs --build
 GET    /v1/apps/{app}/logs?since=&limit=        logs
 PATCH  /v1/apps/{app}/shares                    share, unshare: {"add":[…],"remove":[…],"public":bool}, all or nothing
+PATCH  /v1/orgs/{id}                            org external-sharing
+GET    /v1/orgs/{id}/connectors[/{name}]        connector list, show
+PUT    /v1/orgs/{id}/connectors/{name}          connector add (create or replace)
+DELETE /v1/orgs/{id}/connectors/{name}          connector remove
 
 P1
 POST   /oauth/revoke                            logout (RFC 7009)
@@ -309,6 +324,7 @@ Layout:
 | 2026-11-09 | The default API is `https://api.nimby.run`, replacing `api.nimbostrat.dev` | The main domain moved to `nimby.run`. A saved login only goes to the API that issued it, so after upgrading, the CLI returns `not_logged_in` once and the user logs in again. |
 | 2026-11-10 | The login decides the org; `ask_user`, `account` and `--personal`/`--work` are gone, and deploy pins `org:` in `nimbus.yaml` | Every app now starts private and either kind of account can share, so there's no choice left for the user to make. Pinning the org catches a deploy from the wrong account, and the server decides it, so the CLI can't get it wrong. |
 | 2026-11-09 | A saved login no longer picks the API: it's `NIMBUS_API_URL` or the default | Remembering the login's API dates from when the default was a placeholder. After the move to `nimby.run`, it kept older logins on the dead `api.nimbostrat.dev`. Pointing the CLI at another server now means keeping `NIMBUS_API_URL` set. |
+| 2026-11-12 | Data connectors: `nimbus connector list\|show\|add\|remove`, and `connectors:` in `nimbus.yaml`. Apps query over HTTP through the server's gateway, not with a database driver | Each query logs in as the viewer and only reads, so the app never holds a credential. A shared driver connection can't tell viewers apart, so the app sends each query with the token of the request it's serving. |
 
 ## Open questions
 - "Nimbus" is a crowded name: Mozilla's experimentation platform, Status's Ethereum client, and Nimbus Note all use it. It's fine as a working name, but check trademarks and domain availability before launch.
