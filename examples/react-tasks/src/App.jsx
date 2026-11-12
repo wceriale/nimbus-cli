@@ -7,6 +7,7 @@ let tempIds = 0; // ids for cards that haven't been saved yet
 
 export default function App() {
   const [me, setMe] = useState(null); // the viewer's email, from GET /api/me
+  const [signedIn, setSignedIn] = useState(false); // false on a public app or locally: no account links
   const [columns, setColumns] = useState(null); // [{ id, title, cards: [...] }], as the server sends it
   const [loadError, setLoadError] = useState(null);
   const [notice, setNotice] = useState(null); // why the last change didn't save
@@ -22,7 +23,10 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    api.me().then(({ email }) => setMe(email), () => {});
+    api.me().then(({ email, signedIn }) => {
+      setMe(email);
+      setSignedIn(signedIn);
+    }, () => {});
     load();
     // Pick up teammates' changes whenever the tab comes back into view.
     const onVisible = () => document.visibilityState === "visible" && load();
@@ -95,6 +99,7 @@ export default function App() {
               <span className="me-label">Signed in as </span>
               <strong>{me}</strong>
             </span>
+            {signedIn && <AccountLinks />}
           </p>
         )}
       </header>
@@ -145,3 +150,15 @@ const BoardIcon = () => (
     <rect x="16" y="3" width="6" height="7" rx="2" />
   </svg>
 );
+
+// Nimbus handles these two paths on the app's own host; the app doesn't implement them.
+// Both come back to the page the viewer is on.
+function AccountLinks() {
+  const here = encodeURIComponent(location.pathname + location.search);
+  return (
+    <span className="me-links">
+      <a href={`/.nimbus/switch-account?path=${here}`}>Switch account</a>
+      <a href={`/.nimbus/signout?path=${here}`}>Sign out</a>
+    </span>
+  );
+}

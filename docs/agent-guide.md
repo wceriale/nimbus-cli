@@ -48,7 +48,7 @@ Every new app is private: only the user who deployed it can open it, until they 
 
 ## Writing an app that runs on Nimbus
 1. **Listen on `0.0.0.0:$PORT`.** Read the port from the `PORT` environment variable. If the app has to use a fixed port, set `port:` in `nimbus.yaml` to the same number.
-2. **Don't build a login.** Nimbus signs the viewer in before any request reaches the app, and puts the viewer's email in the `X-Viewer-Email` request header. Trust that header: only Nimbus can reach the app. If the header is missing, the app is public or running locally: treat the viewer as anonymous, or fall back to a placeholder.
+2. **Don't build a login.** Nimbus signs the viewer in before any request reaches the app, and puts the viewer's email in the `X-Viewer-Email` request header. Trust that header: only Nimbus can reach the app. If the header is missing, the app is public or running locally: treat the viewer as anonymous, or fall back to a placeholder. Do show who's signed in, with a link to switch accounts ("Show who's signed in", below).
 3. **React and other single-page apps need a small server.** Browser code can't read request headers. Serve the built frontend from a server that also exposes `GET /api/me`, which returns the `X-Viewer-Email` header. The same server owns the data.
 4. **Keep state in `$NIMBUS_DATA_DIR`.** On Nimbus it's `/data`, a directory on a local disk, so SQLite (including WAL mode) works well there. It survives restarts, idle stops, and redeploys. Locally, default the directory to `./data`.
 5. **Only `$NIMBUS_DATA_DIR` and `/tmp` are writable.** The app runs as an unprivileged user (uid 10001) with a read-only filesystem, so writing anywhere else fails. `HOME` is `/tmp` unless the image sets it. `/tmp` is in memory and cleared on every restart. The app gets 512 MB of memory.
@@ -96,6 +96,58 @@ RUN pip install --no-cache-dir flask gunicorn
 COPY . .
 CMD exec gunicorn --bind 0.0.0.0:${PORT:-8080} --threads 8 app:app
 ```
+
+## Show who's signed in
+Every private app shows, in its header, the viewer's email and a "Switch account" link. A "Sign out" link is optional.
+- The email is the `X-Viewer-Email` request header. A single-page app reads it from its own `GET /api/me`.
+- "Switch account" links to `/.nimbus/switch-account?path=<current path>`. It signs the browser out of Nimbus, shows Google's account picker, and comes back to that path as whoever the viewer picks.
+- "Sign out" links to `/.nimbus/signout?path=<current path>`. It signs the browser out and shows a "You're signed out" page with a link back.
+- Nimbus handles both paths on the app's own host. Don't implement them: they never reach the app. `<current path>` is the URL-encoded path and query, e.g. `encodeURIComponent(location.pathname + location.search)`.
+- Use a plain link (`<a href>`). A `fetch`, image or prefetch of these paths gets a 400 and signs nobody out.
+- Hide both links when `X-Viewer-Email` is missing: on a public app there's no sign-in, and locally there's no Nimbus.
+- Signing out ends the viewer's sign-in on every Nimbus app in that browser, not just this one.
+
+Node (Express) with React. The server:
+```js
+// signedIn is false without the header: a public app, or running locally.
+app.get("/api/me", (req, res) =>
+  res.json({ email: req.get("X-Viewer-Email") ?? null, signedIn: Boolean(req.get("X-Viewer-Email")) }));
+```
+The header component:
+```jsx
+function SignedInAs({ email, signedIn }) {
+  if (!signedIn) return null;
+  const here = encodeURIComponent(location.pathname + location.search);
+  return (
+    <p>
+      Signed in as <strong>{email}</strong>{" "}
+      <a href={`/.nimbus/switch-account?path=${here}`}>Switch account</a>{" "}
+      <a href={`/.nimbus/signout?path=${here}`}>Sign out</a>
+    </p>
+  );
+}
+```
+
+Flask, for every page's template:
+```python
+from urllib.parse import quote
+
+@app.context_processor
+def account_links():
+    email = request.headers.get("X-Viewer-Email")  # missing on a public app, or locally
+    here = quote(request.full_path.rstrip("?"), safe="")
+    return {"viewer": email,
+            "switch_account_url": f"/.nimbus/switch-account?path={here}",
+            "signout_url": f"/.nimbus/signout?path={here}"}
+```
+```html
+{% if viewer %}
+<p>Signed in as <strong>{{ viewer }}</strong>
+  <a href="{{ switch_account_url }}">Switch account</a> <a href="{{ signout_url }}">Sign out</a></p>
+{% endif %}
+```
+
+Both examples in the CLI's repo do this.
 
 ## Reading a database (connectors)
 A connector lets the app read an outside database, such as Postgres, **as the person viewing it**: each query logs in as that viewer, so they see exactly what the database lets them see. Connectors only read. The workspace owner sets them up once (`nimbus connector add`); `nimbus connector list` shows the names.

@@ -19,7 +19,7 @@ async function request(method, path, body) {
 }
 
 export const api = {
-  me: () => request("GET", "/me"), // { email }
+  me: () => request("GET", "/me"), // { email, signedIn }
   board: () => request("GET", "/board"), // { columns: [{ id, title, cards: [...] }] }
   createCard: (title, column) => request("POST", "/cards", { title, column }),
   updateCard: (id, changes) => request("PATCH", `/cards/${id}`, changes), // { title?, column?, index? }

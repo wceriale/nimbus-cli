@@ -91,6 +91,9 @@ button, input, textarea, select { font: inherit; color: inherit; }
 .me .avatar { width: 26px; height: 26px; font-size: 11px; }
 .me-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .me strong { color: var(--ink); font-weight: 600; }
+.me-links { display: flex; gap: 12px; margin-left: 8px; white-space: nowrap; }
+.me-links a { color: var(--muted); font-size: 13px; }
+.me-links a:hover { color: var(--ink); }
 
 /* ---- Board and columns ---- */
 

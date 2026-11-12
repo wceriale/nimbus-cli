@@ -3,7 +3,7 @@
 A sales stats dashboard on fake data, written as a [Nimbus](../../README.md) example: Flask, SQLite, and server-rendered SVG charts, with no JavaScript.
 
 It shows the two things every Nimbus app does:
-- **It knows who's viewing.** Nimbus signs the viewer in and sends their email in the `X-Viewer-Email` header. The page greets them, offers "My deals" if they're one of the fake account executives, and records them under "Recent viewers".
+- **It knows who's viewing.** Nimbus signs the viewer in and sends their email in the `X-Viewer-Email` header. The page greets them, with "Switch account" and "Sign out" links that Nimbus handles (`account_links()` in `app.py`), offers "My deals" if they're one of the fake account executives, and records them under "Recent viewers".
 - **It keeps state in `$NIMBUS_DATA_DIR`.** The SQLite database is `$NIMBUS_DATA_DIR/dashboard.db`. The first start seeds 300 fake deals into it (always the same deals, dated relative to that day), and every page view is written to it.
 
 | File | What's in it |

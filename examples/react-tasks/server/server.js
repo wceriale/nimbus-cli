@@ -134,7 +134,9 @@ app.use((req, res, next) => {
 app.use("/api", express.json({ limit: "10kb" }));
 
 // Browser code can't read request headers, so the frontend asks who's signed in.
-app.get("/api/me", (req, res) => res.json({ email: viewer(req) }));
+// signedIn is false without the header (a public app, or running locally), so the
+// header hides its Switch account and Sign out links.
+app.get("/api/me", (req, res) => res.json({ email: viewer(req), signedIn: Boolean(req.get("X-Viewer-Email")) }));
 
 app.get("/api/board", (req, res) => {
   const cards = allCards.all();

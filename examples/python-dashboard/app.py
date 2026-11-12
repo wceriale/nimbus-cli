@@ -2,6 +2,7 @@
 
 What makes it a Nimbus app, and where to look:
   * Who's viewing comes from the X-Viewer-Email header ........... viewer()
+  * The header shows them, with Switch account and Sign out ....... account_links()
   * All state lives under $NIMBUS_DATA_DIR (/data on Nimbus) ..... DATA_DIR
   * It listens on 0.0.0.0:$PORT ................ Dockerfile, and the bottom of this file
   * No secrets and no outbound calls: the data comes from seed.py.
@@ -11,6 +12,7 @@ import math
 import os
 import sqlite3
 from datetime import date, datetime, timezone
+from urllib.parse import quote
 
 from flask import Flask, g, render_template, request
 
@@ -177,6 +179,19 @@ def viewer():
     """The signed-in viewer. Nimbus authenticates every request and sets this
     header, and only Nimbus can reach the app, so the app can trust it."""
     return (request.headers.get("X-Viewer-Email") or LOCAL_VIEWER).strip().lower()
+
+
+@app.context_processor
+def account_links():
+    """Links for every page's header. Nimbus handles both paths on the app's own
+    host, so the app doesn't implement them; each comes back to this page. With
+    no X-Viewer-Email (a public app, or running locally) there's no sign-in, so
+    no links."""
+    if not request.headers.get("X-Viewer-Email"):
+        return {"switch_account_url": None, "signout_url": None}
+    here = quote(request.full_path.rstrip("?"), safe="")
+    return {"switch_account_url": f"/.nimbus/switch-account?path={here}",
+            "signout_url": f"/.nimbus/signout?path={here}"}
 
 
 def add_months(d, n):
