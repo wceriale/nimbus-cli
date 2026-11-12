@@ -81,6 +81,10 @@ type Fake struct {
 // EgressIP is the address a public connector tells the owner to allowlist.
 const EgressIP = "203.0.113.7"
 
+// ServiceAccount is what a cloudsql connector tells the owner to grant Cloud
+// SQL Client.
+const ServiceAccount = "nimbus-server@nimbus-test.iam.gserviceaccount.com"
+
 type connector struct {
 	name, driver, network string
 	config                map[string]any
@@ -1056,8 +1060,11 @@ func (f *Fake) connectorJSON(c *connector) map[string]any {
 		"config": c.config, "created_by": c.createdBy,
 		"created_at": c.created.UTC().Format(time.RFC3339Nano), "updated_at": c.updated.UTC().Format(time.RFC3339Nano),
 	}
-	if c.network == "public" {
+	switch c.network {
+	case "public":
 		j["allow_from"] = []string{EgressIP}
+	case "cloudsql":
+		j["service_account"] = ServiceAccount
 	}
 	return j
 }
@@ -1135,9 +1142,9 @@ func (f *Fake) putConnector(w http.ResponseWriter, r *http.Request, email string
 		writeErr(w, http.StatusUnprocessableEntity, "unsupported_auth", fmt.Sprintf("Connectors can't log in with %q.", in.Auth),
 			"Set `auth` to one of: viewer.", map[string]any{"auth_modes": []string{"viewer"}})
 		return
-	case in.Network != "" && in.Network != "private" && in.Network != "public":
+	case in.Network != "" && in.Network != "private" && in.Network != "public" && in.Network != "cloudsql":
 		writeErr(w, http.StatusUnprocessableEntity, "unsupported_network", fmt.Sprintf("Connectors can't reach a data source over %q.", in.Network),
-			"Set `network` to one of: private, public.", map[string]any{"networks": []string{"private", "public"}})
+			"Set `network` to one of: private, public, cloudsql.", map[string]any{"networks": []string{"private", "public", "cloudsql"}})
 		return
 	}
 	if in.Network == "" {
@@ -1151,8 +1158,25 @@ func (f *Fake) putConnector(w http.ResponseWriter, r *http.Request, email string
 			return
 		}
 	}
-	host, _ := cfg["host"].(string)
 	db, _ := cfg["database"].(string)
+	if in.Network == "cloudsql" {
+		inst, _ := cfg["instance"].(string)
+		switch {
+		case strings.Count(inst, ":") < 2:
+			bad("instance", "The config has no Cloud SQL `instance`, or it isn't PROJECT:REGION:INSTANCE.",
+				"Use the instance connection name, PROJECT:REGION:INSTANCE.")
+			return
+		case cfg["host"] != nil:
+			bad("host", "The config has an unknown field `host`.", "Allowed fields: instance, database.")
+			return
+		case db == "":
+			bad("database", "The config has no `database`.", "Set `database` to the name of the database to read.")
+			return
+		}
+		f.saveConnector(w, name, email, in.Driver, in.Network, cfg)
+		return
+	}
+	host, _ := cfg["host"].(string)
 	switch {
 	case host == "":
 		bad("host", "The config has no `host`.", "Set `host` to the database's IP address or hostname, e.g. 10.0.0.5.")
@@ -1183,6 +1207,11 @@ func (f *Fake) putConnector(w http.ResponseWriter, r *http.Request, email string
 		bad("server_ca", "`server_ca` isn't a PEM certificate.", "Paste the CA certificate in PEM form.")
 		return
 	}
+	f.saveConnector(w, name, email, in.Driver, in.Network, cfg)
+}
+
+// saveConnector adds or replaces a connector and answers with it.
+func (f *Fake) saveConnector(w http.ResponseWriter, name, email, driver, network string, cfg map[string]any) {
 	if f.connectors == nil {
 		f.connectors = map[string]*connector{}
 	}
@@ -1193,7 +1222,7 @@ func (f *Fake) putConnector(w http.ResponseWriter, r *http.Request, email string
 		f.connectors[name] = c
 		status = http.StatusCreated
 	}
-	c.driver, c.network, c.config, c.updated = in.Driver, in.Network, cfg, now
+	c.driver, c.network, c.config, c.updated = driver, network, cfg, now
 	writeJSON(w, status, f.connectorJSON(c))
 }
 

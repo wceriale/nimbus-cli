@@ -128,6 +128,9 @@ func (r *connectorShown) Text() string {
 	if len(c.AllowFrom) > 0 {
 		lines = append(lines, "Allow these Nimbus IPs on the database: "+strings.Join(c.AllowFrom, ", "))
 	}
+	if c.ServiceAccount != "" {
+		lines = append(lines, grantHint(c.ServiceAccount))
+	}
 	if c.CreatedBy != "" {
 		lines = append(lines, "Set up by "+c.CreatedBy+".")
 	}
@@ -135,25 +138,32 @@ func (r *connectorShown) Text() string {
 }
 
 func (a *App) connectorAddCmd() *cobra.Command {
-	var driver, host, database, sslmode, network, caFile string
+	var driver, instance, host, database, sslmode, network, caFile string
 	var port int
 	cmd := &cobra.Command{
-		Use:   "add <name> --host <address> --database <name>",
+		Use:   "add <name> (--instance <connection-name> | --host <address>) --database <name>",
 		Short: "Add a connector, or change one (owner only)",
 		Long: `Add a data connector to the workspace, or replace one with the same name.
 Owner only. Each viewer's query logs in as that viewer, so there's no
 user or password to give.
 
-For Cloud SQL over its public IP: --network public, --sslmode verify-ca,
-and --server-ca-file with the instance's CA certificate
-(gcloud sql ssl server-ca-certs list --instance=INSTANCE --format='value(cert)').
-Then allow the IPs it prints in the instance's authorized networks.`,
-		Example: `  $ nimbus connector add warehouse --host 35.1.2.3 --database analytics --network public --sslmode verify-ca --server-ca-file server-ca.pem
-  {"ok":true,"data":{"name":"warehouse","driver":"postgres","auth":"viewer","network":"public","read_only":true,"config":{...},"allow_from":["34.59.67.222"],...}}`,
+For Cloud SQL: --instance with the instance connection name
+(gcloud sql instances describe INSTANCE --format='value(connectionName)').
+Then grant the service account it prints the Cloud SQL Client role on the
+instance's project. The instance needs no authorized networks.
+
+For any other Postgres: --host, and --network public for a public IP, which
+then has to allow the Nimbus IPs it prints.`,
+		Example: `  $ nimbus connector add warehouse --instance acme-prod:us-central1:main-db --database analytics
+  {"ok":true,"data":{"name":"warehouse","driver":"postgres","auth":"viewer","network":"cloudsql","read_only":true,"config":{"instance":"acme-prod:us-central1:main-db","database":"analytics"},"service_account":"nimbus-server@nimbus-513018.iam.gserviceaccount.com",...}}
+  $ nimbus connector add billing --host 35.1.2.3 --database billing --network public --sslmode verify-ca --server-ca-file server-ca.pem`,
 		Args: func(cmd *cobra.Command, args []string) error { return argCount(cmd, args, 1, 1) },
 		RunE: a.run(func(ctx context.Context, args []string) (any, error) {
+			if instance != "" && network == "" {
+				network = "cloudsql"
+			}
 			in := api.ConnectorInput{Driver: driver, Auth: "viewer", Network: network, Config: map[string]any{}}
-			flags := map[string]string{"host": host, "database": database, "sslmode": sslmode}
+			flags := map[string]string{"instance": instance, "host": host, "database": database, "sslmode": sslmode}
 			for k, v := range flags {
 				if v != "" {
 					in.Config[k] = v
@@ -186,10 +196,11 @@ Then allow the IPs it prints in the instance's authorized networks.`,
 	}
 	f := cmd.Flags()
 	f.StringVar(&driver, "driver", "postgres", "kind of data source")
+	f.StringVar(&instance, "instance", "", "Cloud SQL: the instance connection name, PROJECT:REGION:INSTANCE")
 	f.StringVar(&host, "host", "", "the database's IP address or hostname")
 	f.IntVar(&port, "port", 0, "port (default 5432)")
 	f.StringVar(&database, "database", "", "database to read")
-	f.StringVar(&network, "network", "", "private (default): an address on a private network; public: a public IP that allowlists Nimbus")
+	f.StringVar(&network, "network", "", "private (default): an address on a private network; public: a public IP that allowlists Nimbus; cloudsql (with --instance)")
 	f.StringVar(&sslmode, "sslmode", "", "verify-full (default), verify-ca (needs --server-ca-file), or require (private networks only)")
 	f.StringVar(&caFile, "server-ca-file", "", "the server's CA certificate (PEM), to verify it")
 	return cmd
@@ -217,7 +228,15 @@ func (r *connectorAdded) Text() string {
 	if len(r.AllowFrom) > 0 {
 		s += "\nAllow these Nimbus IPs on the database: " + strings.Join(r.AllowFrom, ", ")
 	}
+	if r.ServiceAccount != "" {
+		s += "\n" + grantHint(r.ServiceAccount)
+	}
 	return s
+}
+
+// grantHint tells a Cloud SQL connector's owner what to grant Nimbus.
+func grantHint(serviceAccount string) string {
+	return "Grant Nimbus's service account " + serviceAccount + " the Cloud SQL Client role on the instance's project."
 }
 
 func (a *App) connectorRemoveCmd() *cobra.Command {
@@ -249,14 +268,19 @@ type connectorRemoved struct {
 
 func (r *connectorRemoved) Text() string { return "Connector " + r.Name + " removed." }
 
-// where is a connector's address, e.g. 35.1.2.3:5432/analytics.
+// where is a connector's address, e.g. 35.1.2.3:5432/analytics, or
+// acme-prod:us-central1:main-db/analytics for Cloud SQL.
 func where(c api.Connector) string {
 	var cfg struct {
+		Instance string `json:"instance"`
 		Host     string `json:"host"`
 		Port     int    `json:"port"`
 		Database string `json:"database"`
 	}
 	json.Unmarshal(c.Config, &cfg)
+	if cfg.Instance != "" {
+		return cfg.Instance + "/" + cfg.Database
+	}
 	if cfg.Host == "" {
 		return "(no host)"
 	}

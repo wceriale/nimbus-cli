@@ -50,6 +50,16 @@ func TestConnectors(t *testing.T) {
 		t.Fatalf("list = %v", d)
 	}
 
+	// Cloud SQL by instance name: the network follows from --instance, and
+	// the owner is told which service account to grant.
+	d = h.ok(work, "connector", "add", "ledger", "--instance", "acme-prod:us-east5:main-db", "--database", "ledger")
+	if cfg, _ := d["config"].(map[string]any); d["network"] != "cloudsql" || cfg["instance"] != "acme-prod:us-east5:main-db" ||
+		cfg["host"] != nil || d["service_account"] != fakeapi.ServiceAccount {
+		t.Fatalf("cloudsql add = %v", d)
+	}
+	h.fail("invalid_connector_config", t.TempDir(), "connector", "add", "ledger", "--instance", "main-db", "--database", "ledger")
+	h.ok(t.TempDir(), "connector", "remove", "ledger")
+
 	// The server's refusals come through unchanged.
 	if e := h.fail("invalid_connector_config", t.TempDir(), "connector", "add", "billing", "--database", "x"); e.Details["field"] != "host" {
 		t.Errorf("no host = %+v", e)

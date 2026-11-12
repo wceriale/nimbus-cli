@@ -97,8 +97,10 @@ nimbus list                apps you own
 nimbus org external-sharing on|off   owner only: let a workspace's apps be shared outside its domain
 nimbus connector list      the workspace's data connectors (any member)
 nimbus connector show <name>
+nimbus connector add <name> --instance <project:region:instance> --database <db>
+                           owner only: add or replace a Cloud SQL connector; queries log in as each viewer, so no user or password
 nimbus connector add <name> --host <addr> --database <db> [--network private|public] [--port] [--sslmode] [--server-ca-file]
-                           owner only: add or replace a connector; queries log in as each viewer, so no user or password
+                           owner only: the same for any other Postgres
 nimbus connector remove <name>   owner only
 nimbus docs                the agent guide, printed as markdown
 ```

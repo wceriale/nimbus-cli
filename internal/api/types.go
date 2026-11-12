@@ -153,13 +153,16 @@ type Connector struct {
 	Name      string          `json:"name"`
 	Driver    string          `json:"driver"`  // e.g. postgres
 	Auth      string          `json:"auth"`    // viewer: each viewer logs in as themselves
-	Network   string          `json:"network"` // private or public
+	Network   string          `json:"network"` // private, public, or cloudsql
 	ReadOnly  bool            `json:"read_only"`
 	Config    json.RawMessage `json:"config"`               // driver-specific; never a secret
 	AllowFrom []string        `json:"allow_from,omitempty"` // public network: Nimbus's IPs to allowlist
-	CreatedBy string          `json:"created_by"`
-	CreatedAt time.Time       `json:"created_at"`
-	UpdatedAt time.Time       `json:"updated_at"`
+	// ServiceAccount is, for cloudsql, Nimbus's service account, which the
+	// instance's project grants Cloud SQL Client.
+	ServiceAccount string    `json:"service_account,omitempty"`
+	CreatedBy      string    `json:"created_by"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 // ConnectorInput is a PUT body: only the fields given are sent, and the
