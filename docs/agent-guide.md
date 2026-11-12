@@ -98,7 +98,7 @@ CMD exec gunicorn --bind 0.0.0.0:${PORT:-8080} --threads 8 app:app
 ```
 
 ## Show who's signed in
-Every private app shows, in its header, the viewer's email and a "Switch account" link. A "Sign out" link is optional.
+Someone signed in with the wrong Google account doesn't reach the app: Nimbus shows them "You don't have access to this app" with a "Switch account" link, and the app needs nothing for that. Once they're in, every private app should show, in its header, the viewer's email and a "Switch account" link. A "Sign out" link is optional.
 - The email is the `X-Viewer-Email` request header. A single-page app reads it from its own `GET /api/me`.
 - "Switch account" links to `/.nimbus/switch-account?path=<current path>`. It signs the browser out of Nimbus, shows Google's account picker, and comes back to that path as whoever the viewer picks.
 - "Sign out" links to `/.nimbus/signout?path=<current path>`. It signs the browser out and shows a "You're signed out" page with a link back.
