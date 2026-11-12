@@ -53,8 +53,8 @@ Every new app is private: only the user who deployed it can open it, until they 
 4. **Keep state in `$NIMBUS_DATA_DIR`.** On Nimbus it's `/data`, a directory on a local disk, so SQLite (including WAL mode) works well there. It survives restarts, idle stops, and redeploys. Locally, default the directory to `./data`.
 5. **Only `$NIMBUS_DATA_DIR` and `/tmp` are writable.** The app runs as an unprivileged user (uid 10001) with a read-only filesystem, so writing anywhere else fails. `HOME` is `/tmp` unless the image sets it. `/tmp` is in memory and cleared on every restart. The app gets 512 MB of memory.
 6. **Nimbus only checks that the app accepts connections on `$PORT`.** It never sends HTTP requests of its own, so every request the app sees comes from a viewer, who has signed in unless the app is public.
-7. **Don't put secrets in the app.** That means no API keys in code, and `.env` files aren't uploaded anyway.
-8. **No outbound internet.** The build can download packages, but the running app can't call outside APIs or databases. Requests made by the viewer's browser, such as CDNs and fonts, aren't affected.
+7. **Don't put secrets in the app.** That means no API keys or database passwords in code, and `.env` files aren't uploaded anyway. To read a database, use a connector (below): it logs in as the viewer, so the app holds no credential.
+8. **No outbound internet.** The build can download packages, but the running app can't call outside APIs or databases. The one exception is the connector gateway at `$NIMBUS_GATEWAY_URL` (below). Requests made by the viewer's browser, such as CDNs and fonts, aren't affected.
 9. **One instance, which sleeps when idle.** After 15 minutes without requests or open WebSockets the app stops: it gets SIGTERM, then 10 seconds to exit. The next request starts it again, which takes a second or two.
 10. **Expired sign-ins reach `fetch` as a 401.** When a viewer's sign-in has expired, page loads are sent to sign in again, but `fetch` calls get `401` with `{"error":"not_signed_in"}`. Reload the page when you see it.
 11. **WebSockets work.** Open them from the app's own pages, to the app's own URL: `new WebSocket(location.origin.replace("http", "ws") + "/ws")`. The handshake carries `X-Viewer-Email` like any other request. On a private app, sockets from other sites are refused; on a public app, any site can open one. With gunicorn, each open socket holds a thread, so set `--threads` to at least the number of sockets you expect.
@@ -97,11 +97,57 @@ COPY . .
 CMD exec gunicorn --bind 0.0.0.0:${PORT:-8080} --threads 8 app:app
 ```
 
+## Reading a database (connectors)
+A connector lets the app read an outside database, such as Postgres, **as the person viewing it**: each query logs in as that viewer, so they see exactly what the database lets them see. Connectors only read. The workspace owner sets them up once (`nimbus connector add`); `nimbus connector list` shows the names.
+
+1. **Declare it** in `nimbus.yaml`: `connectors: [warehouse]`. Deploying with a name the workspace doesn't have fails with `unknown_connector`.
+2. **Query from the app's server**, never from browser code: `POST $NIMBUS_GATEWAY_URL/v1/query` with JSON `{"connector": "warehouse", "sql": "...", "params": [...]}`, and the `X-Viewer-Token` header **copied from the request you're serving**. The token says who's viewing; it lasts 5 minutes, so use it for that request's queries only.
+3. **Plain SQL, one read statement:** `SELECT`, `WITH … SELECT`, `VALUES` or `TABLE`, with `$1`, `$2`, … for parameters. Never paste values into the SQL. Writes are always refused, and ORMs that need a live database connection won't work.
+4. **The answer** is `{"columns": [...], "rows": [[...], ...], "truncated": false}`. At most 10,000 rows (`truncated` is true if there were more), within 30 seconds. Timestamps are RFC 3339 strings; JSON columns are JSON.
+5. **Viewers consent once.** The first time someone opens the app, Nimbus asks them to let it read the data as them, then brings them back. If a query still answers `401` with `error.code` `consent_required`, send the browser to `error.consent_url`.
+6. **Other errors** come as `{"error": {"code", "message"}}`: `permission_denied` (the viewer can't read that table: show it, don't retry), `no_access` (the database doesn't know the viewer), `not_read_only`, `query_failed` (e.g. a syntax error), `timeout`, `connect_failed`, `connector_not_declared`, `invalid_viewer_token` (the token was missing or older than 5 minutes). Show the message to the viewer; don't retry in a loop.
+
+Node (18+):
+```js
+async function query(req, connector, sql, params = []) {
+  const r = await fetch(process.env.NIMBUS_GATEWAY_URL + "/v1/query", {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-viewer-token": req.headers["x-viewer-token"] ?? "" },
+    body: JSON.stringify({ connector, sql, params }),
+  });
+  const body = await r.json();
+  if (!r.ok) throw Object.assign(new Error(body.error.message), body.error, { status: r.status });
+  return body; // { columns, rows, truncated }
+}
+// e.g. const { rows } = await query(req, "warehouse", "SELECT id, amount FROM accounts WHERE region = $1", [region]);
+```
+
+Python (Flask):
+```python
+import json, os, urllib.request
+from flask import request
+
+def query(connector, sql, params=()):
+    req = urllib.request.Request(
+        os.environ["NIMBUS_GATEWAY_URL"] + "/v1/query",
+        data=json.dumps({"connector": connector, "sql": sql, "params": list(params)}).encode(),
+        headers={"content-type": "application/json", "x-viewer-token": request.headers.get("X-Viewer-Token", "")},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=40) as r:
+            return json.load(r)  # {"columns", "rows", "truncated"}
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(json.load(e)["error"]) from None
+```
+
+Locally there's no gateway: guard on `NIMBUS_GATEWAY_URL` and use sample data when it's unset.
+
 ## nimbus.yaml
 ```yaml
 name: renewal-desk      # required: 3–40 lowercase letters, digits, hyphens; becomes the URL
 port: 8080              # optional: the app receives it as $PORT
 org: acme.com           # written by the first deploy: the workspace's domain, or a personal space like u-you
+connectors: [warehouse] # optional: the workspace's data connectors the app reads (nimbus connector list)
 ```
 The file has no other fields. A `share:` field is an error, because sharing is a command.
 
@@ -117,7 +163,10 @@ The file has no other fields. A `share:` field is an error, because sharing is a
 | `external_sharing_disabled` | The addresses in `details.emails` are outside the workspace's domain. Share inside it, or ask the workspace owner to run `nimbus org external-sharing on`. |
 | `no_org` | The user hasn't deployed yet, so there's no workspace to change. Deploy first. |
 | `org_is_personal` | A personal space has no settings; its apps already share with anyone. |
-| `not_org_owner`, `org_not_found` | Only the workspace owner can change its settings. Tell the user. |
+| `not_org_owner`, `org_not_found` | Only the workspace owner can change its settings or connectors. Tell the user. |
+| `unknown_connector` | `nimbus.yaml` lists a connector the workspace doesn't have. Check `nimbus connector list`, or ask the workspace owner to add it. |
+| `connector_not_found` | No connector by that name. Check `nimbus connector list`. |
+| `invalid_connector_config`, `unsupported_driver`, `unsupported_network`, `unsupported_auth` | Fix what the message and hint say (`details.field` names the config field), and run `nimbus connector add` again. |
 | `api_url_not_set`, `invalid_api_url` | Set `NIMBUS_API_URL` to the URL the user gives you. |
 | `cli_outdated` | Re-run the install one-liner, then retry. |
 | `invalid_manifest`, `invalid_name` | Fix the field the message names. |
@@ -137,6 +186,7 @@ The file has no other fields. A `share:` field is an error, because sharing is a
 - **Deploy wait:** 10 minutes.
 - **Requests:** time out after 5 minutes.
 - **WebSockets:** at most 1,000 open per app. They have no time limit, but close when access ends or the app restarts.
-- **Runtime:** one instance per app, no outbound internet, and a stop after 15 idle minutes.
+- **Runtime:** one instance per app, no outbound internet except the connector gateway, and a stop after 15 idle minutes.
+- **Connector queries:** one read statement, 30 seconds, 10,000 rows, 1 MB request.
 - **Apps:** 5 per workspace or personal space on the free plan, public ones included.
 - **Sharing:** 5 people per app on the free plan; inside the workspace's domain unless its owner turns on external sharing. Groups aren't supported yet.

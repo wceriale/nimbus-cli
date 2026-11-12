@@ -2,6 +2,7 @@ package manifest
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -53,6 +54,9 @@ func TestParse(t *testing.T) {
 	if m, err := Parse([]byte("name: renewal-desk\norg: u-you\n")); err != nil || m.Org != "u-you" {
 		t.Errorf("Parse of a personal space = %+v, %v", m, err)
 	}
+	if m, err := Parse([]byte("name: renewal-desk\nconnectors: [Warehouse, billing, warehouse]\n")); err != nil || fmt.Sprint(m.Connectors) != "[warehouse billing]" {
+		t.Errorf("Parse of connectors = %+v, %v", m, err)
+	}
 	// What older CLIs wrote is accepted and ignored.
 	if m, err := Parse([]byte("name: renewal-desk\nacc" + "ount: work\n")); err != nil || m.Org != "" {
 		t.Errorf("Parse of an old manifest = %+v, %v; want no org", m, err)
@@ -63,6 +67,9 @@ func TestParseErrors(t *testing.T) {
 	for _, tc := range []struct{ yaml, hint string }{
 		{"name: x\nshare:\n  - a@b.com\n", "nimbus share"},
 		{"name: renewal-desk\nruntime: docker\n", "Allowed fields"},
+		{"name: renewal-desk\nconnectors: [bad_name]\n", "nimbus connector list"},
+		{"name: renewal-desk\nconnectors: warehouse\n", "format"},
+		{"name: renewal-desk\nconnectors: [aaa, bbb, ccc, ddd, eee, fff, ggg, hhh, iii, jjj, kkk]\n", "at most 10"},
 		{"port: 8080\n", "Add `name"},
 		{"name: Bad_Name\n", "lowercase"},
 		{"name: renewal-desk\nport: 99999\n", "between 1 and 65535"},

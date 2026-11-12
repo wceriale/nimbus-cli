@@ -25,13 +25,20 @@ type Manifest struct {
 	// project deploys to, or "" until the first deploy writes it.
 	Org    string   `yaml:"org,omitempty"`
 	Scopes []string `yaml:"scopes,omitempty"`
+	// Connectors are the workspace's data connectors the app reads, by name
+	// (`nimbus connector list`). The app queries them through the gateway, as
+	// the person viewing it, read-only.
+	Connectors []string `yaml:"connectors,omitempty"`
 }
+
+// maxConnectors caps how many connectors one app declares.
+const maxConnectors = 10
 
 var (
 	nameRE  = regexp.MustCompile(`^[a-z]([a-z0-9-]*[a-z0-9])?$`)
 	labelRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
 	scopeRE = regexp.MustCompile(`^[a-z0-9][a-z0-9_.:-]*$`)
-	fields  = []string{"name", "port", "org", "scopes"}
+	fields  = []string{"name", "port", "org", "scopes", "connectors"}
 	// legacyFields are accepted and ignored, so projects from older CLIs
 	// still deploy. Writing org: removes them.
 	legacyFields = []string{"account"}
@@ -105,7 +112,7 @@ func Parse(b []byte) (*Manifest, error) {
 				"nimbus.yaml has a `share:` field, but sharing isn't part of the manifest.")
 		}
 		if !slices.Contains(fields, k) && !slices.Contains(legacyFields, k) {
-			return nil, invalid("Allowed fields: name, port, org, scopes. Run `nimbus docs` for the format.",
+			return nil, invalid("Allowed fields: name, port, org, scopes, connectors. Run `nimbus docs` for the format.",
 				"nimbus.yaml has an unknown field `%s`.", k)
 		}
 	}
@@ -117,6 +124,13 @@ func Parse(b []byte) (*Manifest, error) {
 		return nil, invalidOrg("")
 	}
 	m.Org = strings.ToLower(strings.TrimSpace(m.Org))
+	var connectors []string
+	for _, c := range m.Connectors {
+		if c = strings.ToLower(strings.TrimSpace(c)); !slices.Contains(connectors, c) {
+			connectors = append(connectors, c)
+		}
+	}
+	m.Connectors = connectors
 	if err := m.Validate(); err != nil {
 		return nil, err
 	}
@@ -138,6 +152,15 @@ func (m *Manifest) Validate() error {
 	}
 	if m.Org != "" && !ValidOrg(m.Org) {
 		return invalidOrg(m.Org)
+	}
+	if len(m.Connectors) > maxConnectors {
+		return invalid("List at most 10 connectors under `connectors:`.", "nimbus.yaml lists %d connectors.", len(m.Connectors))
+	}
+	for _, c := range m.Connectors {
+		if !ValidName(c) {
+			return invalid("List connector names, e.g. `connectors: [warehouse]`. `nimbus connector list` shows them.",
+				"`connectors` in nimbus.yaml has %q, which isn't a connector name.", c)
+		}
 	}
 	for _, s := range m.Scopes {
 		if !scopeRE.MatchString(s) {
